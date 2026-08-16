@@ -2,7 +2,7 @@ import sys
 import os
 import pandas as pd
 import subprocess
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer as FastMCP
 from typing import Dict, List, Optional, Tuple, Any, Union
 
 # Initialize MCP server

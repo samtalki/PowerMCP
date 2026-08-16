@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pytest
 
-pytest.importorskip("powerio", minversion="0.4.0")
+pytest.importorskip("powerio", minversion="0.9.0")
 
 import powerio  # noqa: E402
 
@@ -71,7 +71,7 @@ mpc.branch = [
 def test_parse_json_round_trips():
     r = powerio_mcp.parse(path=str(CASE9))
     assert r["schema"] == "powerio.parse"
-    assert r["schema_version"] == "0.1"
+    assert r["powerio_version"] == powerio.__version__
     assert r["domain"] == "transmission"
     assert r["model"] == "balanced"
     assert r["json_format"] == "powerio-json"
@@ -95,18 +95,18 @@ def test_tool_surface_is_canonical():
         "display",
     }
     for name in ("parse", "summary", "normalize", "matrix", "display"):
-        props = tools[name].inputSchema["properties"]
+        props = tools[name].input_schema["properties"]
         assert "from_format" in props
         assert "format" not in props
-    parse_props = tools["parse"].inputSchema["properties"]
+    parse_props = tools["parse"].input_schema["properties"]
     assert "transport" in parse_props
-    convert_props = tools["convert"].inputSchema["properties"]
+    convert_props = tools["convert"].input_schema["properties"]
     assert "to_format" in convert_props and "from_format" in convert_props
     assert "package_json" in convert_props
     assert "to" not in convert_props and "format" not in convert_props
     for name in ("summary", "normalize", "matrix"):
-        assert "package_json" in tools[name].inputSchema["properties"]
-    save_schema = tools["save"].inputSchema
+        assert "package_json" in tools[name].input_schema["properties"]
+    save_schema = tools["save"].input_schema
     assert save_schema["required"] == ["out_path"]
     save_props = save_schema["properties"]
     assert "to_format" in save_props and "from_format" in save_props
@@ -128,7 +128,7 @@ def test_parse_transport_accepted_downstream():
 def test_matrix_bprime():
     m = powerio_mcp.matrix("bprime", path=str(CASE9))
     assert m["schema"] == "powerio.matrix"
-    assert m["schema_version"] == "0.1"
+    assert m["powerio_version"] == powerio.__version__
     assert m["domain"] == "transmission"
     assert m["model"] == "balanced"
     assert m["json_format"] == "powerio-json"
@@ -166,7 +166,7 @@ def test_convert_powermodels():
 def test_summary_fields():
     s = powerio_mcp.summary(path=str(CASE9))
     assert s["schema"] == "powerio.summary"
-    assert s["schema_version"] == "0.1"
+    assert s["powerio_version"] == powerio.__version__
     assert s["domain"] == "transmission"
     assert s["model"] == "balanced"
     assert s["json_format"] == "powerio-json"
@@ -331,7 +331,7 @@ def record_mcp_run(monkeypatch):
     def fake_run(self, *args, **kwargs):
         calls.append((args, kwargs))
 
-    monkeypatch.setattr("mcp.server.fastmcp.FastMCP.run", fake_run, raising=True)
+    monkeypatch.setattr("mcp.server.mcpserver.MCPServer.run", fake_run, raising=True)
     return calls
 
 
@@ -435,6 +435,52 @@ def test_convert_oserror_normalizes_to_valueerror(monkeypatch):
     monkeypatch.setattr(powerio, "convert_str", boom)
     with pytest.raises(ValueError):
         powerio_mcp.convert(to_format="psse", content="x", from_format="matpower")
+
+
+def test_allowed_roots_rejects_read_outside_root(tmp_path, monkeypatch):
+    # POWERIO_MCP_ALLOWED_ROOTS is unset for every other test in this file, so
+    # `_check_allowed_path` is a no-op there; this is the one place the
+    # containment check itself is exercised, on both the reject and admit side.
+    root = tmp_path / "root"
+    root.mkdir()
+    outside = tmp_path / "outside" / "case9.m"
+    outside.parent.mkdir()
+    outside.write_text(CASE9.read_text())
+    monkeypatch.setenv("POWERIO_MCP_ALLOWED_ROOTS", str(root))
+    with pytest.raises(ValueError, match="outside allowed MCP roots"):
+        powerio_mcp.parse(path=str(outside))
+
+
+def test_allowed_roots_admits_read_inside_root(tmp_path, monkeypatch):
+    root = tmp_path / "root"
+    root.mkdir()
+    case = root / "case9.m"
+    case.write_text(CASE9.read_text())
+    monkeypatch.setenv("POWERIO_MCP_ALLOWED_ROOTS", str(root))
+    r = powerio_mcp.parse(path=str(case))
+    assert r["schema"] == "powerio.parse"
+
+
+def test_allowed_roots_rejects_write_outside_root(tmp_path, monkeypatch):
+    root = tmp_path / "root"
+    root.mkdir()
+    outside_out = tmp_path / "outside" / "case9.raw"
+    outside_out.parent.mkdir()
+    monkeypatch.setenv("POWERIO_MCP_ALLOWED_ROOTS", str(root))
+    with pytest.raises(ValueError, match="outside allowed MCP roots"):
+        powerio_mcp.save(
+            out_path=str(outside_out), content=CASE9.read_text(), to_format="psse"
+        )
+
+
+def test_allowed_roots_admits_write_inside_root(tmp_path, monkeypatch):
+    root = tmp_path / "root"
+    root.mkdir()
+    monkeypatch.setenv("POWERIO_MCP_ALLOWED_ROOTS", str(root))
+    out = root / "case9.raw"
+    r = powerio_mcp.save(out_path=str(out), content=CASE9.read_text(), to_format="psse")
+    assert r["path"] == str(out)
+    assert out.exists()
 
 
 def test_unreadable_file_maps_cleanly(tmp_path):
@@ -580,7 +626,7 @@ def test_gridfm_missing_dir_maps_cleanly(tmp_path):
 def test_display_decodes_pwd():
     r = powerio_mcp.display(str(ACTIVSG200_PWD))
     assert r["schema"] == "powerio.display"
-    assert r["schema_version"] == "0.1"
+    assert r["powerio_version"] == powerio.__version__
     assert r["domain"] == "display"
     assert r["model"] == "display"
     assert r["source_format"] == "powerworld-pwd"
@@ -641,7 +687,7 @@ def _load_opendss_configuration(monkeypatch):
 
 def test_opendss_registration_excludes_distribution_wrapper(monkeypatch):
     configuration = _load_opendss_configuration(monkeypatch)
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server.mcpserver import MCPServer as FastMCP
 
     mcp = FastMCP("opendss-test")
     configuration.register_configuration_tools(mcp)

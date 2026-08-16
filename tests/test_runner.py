@@ -20,7 +20,7 @@ def record_mcp_run(monkeypatch):
     def fake_run(self, *args, **kwargs):
         calls.append((args, kwargs))
 
-    monkeypatch.setattr("mcp.server.fastmcp.FastMCP.run", fake_run, raising=True)
+    monkeypatch.setattr("mcp.server.mcpserver.MCPServer.run", fake_run, raising=True)
     return calls
 
 

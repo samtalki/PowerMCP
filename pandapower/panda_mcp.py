@@ -1,6 +1,6 @@
 from typing import Dict, List, Optional, Tuple, Any, Union
 import pandapower as pp
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer as FastMCP
 import logging
 
 

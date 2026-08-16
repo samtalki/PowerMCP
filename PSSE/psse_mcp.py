@@ -4,7 +4,7 @@ import json
 import io
 from pathlib import Path
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer as FastMCP
 from typing import Dict, List, Optional, Any
 
 # Initialize MCP server

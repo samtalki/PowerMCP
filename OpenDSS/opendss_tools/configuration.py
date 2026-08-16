@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Any, Dict
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer as FastMCP
 from py_dss_toolkit import dss_tools
 
 from core import state
