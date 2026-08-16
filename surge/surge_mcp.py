@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import surge
 from mcp.server.fastmcp import FastMCP
+from powermcp.sandbox import PathNotAllowed, checked_path
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -89,6 +90,10 @@ def load_network(file_path: str, format: Optional[str] = None) -> Dict[str, Any]
     Returns:
         {"status", "message", "results": {network summary}}.
     """
+    try:
+        file_path = checked_path(file_path, purpose="file_path")
+    except PathNotAllowed as exc:
+        return {"status": "error", "message": str(exc)}
     global _current_net, _last_pf_result
     try:
         _current_net = surge.load(file_path, format=format) if format else surge.load(file_path)
@@ -115,6 +120,10 @@ def save_network(file_path: str) -> Dict[str, Any]:
     Returns:
         {"status", "message"}.
     """
+    try:
+        file_path = checked_path(file_path, purpose="file_path", for_write=True)
+    except PathNotAllowed as exc:
+        return {"status": "error", "message": str(exc)}
     try:
         net = _require_network()
         surge.save(net, file_path)
@@ -902,6 +911,10 @@ def export_tables(output_dir: str) -> Dict[str, Any]:
     Returns:
         {"status", "message", "results": {"files": [...], "rows": {...}}}.
     """
+    try:
+        output_dir = checked_path(output_dir, purpose="output_dir", for_write=True)
+    except PathNotAllowed as exc:
+        return {"status": "error", "message": str(exc)}
     try:
         import csv as _csv
         import os

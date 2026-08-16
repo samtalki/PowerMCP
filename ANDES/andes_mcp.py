@@ -9,6 +9,7 @@ from pathlib import Path
 from contextlib import redirect_stdout, redirect_stderr
 from mcp.server.fastmcp import FastMCP
 from typing import Dict, Any, Optional
+from powermcp.sandbox import PathNotAllowed, checked_path
 
 # Storage directory resolved lazily (no filesystem writes at import time)
 def _andes_runs_dir():
@@ -68,6 +69,10 @@ def run_power_flow(file_path: str) -> Dict[str, Any]:
     Returns:
         Dict containing power flow results and output information
     """
+    try:
+        file_path = checked_path(file_path, purpose="file_path")
+    except PathNotAllowed as exc:
+        return {"status": "error", "message": str(exc)}
     try:
         _ensure_file_logging()
         # Convert to absolute path if not already
@@ -225,6 +230,10 @@ def run_eigenvalue_analysis(file_path: str) -> Dict[str, Any]:
         Dict containing the eigenvalue analysis results
     """
     try:
+        file_path = checked_path(file_path, purpose="file_path")
+    except PathNotAllowed as exc:
+        return {"status": "error", "message": str(exc)}
+    try:
         _ensure_file_logging()
         # Convert to absolute path if relative
         abs_file_path = os.path.abspath(file_path)
@@ -365,6 +374,10 @@ def load_network_from_json(
         Dict with status, case_file path, component counts, and fidelity warnings
     """
     try:
+        out_path = checked_path(out_path, purpose="out_path", for_write=True)
+    except PathNotAllowed as exc:
+        return {"status": "error", "message": str(exc)}
+    try:
         import powerio
     except ImportError:
         return {"status": "error", "message": _POWERIO_HINT}
@@ -411,6 +424,14 @@ def load_network_from_any(
     Returns:
         Dict with status, case_file path, component counts, and fidelity warnings
     """
+    try:
+        file_path = checked_path(file_path, purpose="file_path")
+    except PathNotAllowed as exc:
+        return {"status": "error", "message": str(exc)}
+    try:
+        out_path = checked_path(out_path, purpose="out_path", for_write=True)
+    except PathNotAllowed as exc:
+        return {"status": "error", "message": str(exc)}
     try:
         import powerio
     except ImportError:

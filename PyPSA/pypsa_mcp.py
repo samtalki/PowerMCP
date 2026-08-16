@@ -6,6 +6,7 @@ from pypsa import Network
 import numpy as np
 import pandas as pd
 from typing import Dict, List, Optional, Union, Any
+from powermcp.sandbox import PathNotAllowed, checked_path
 
 
 def _to_serializable(obj: Any) -> Any:
@@ -50,6 +51,10 @@ def get_network_info(network_name: str) -> Dict[str, Any]:
 @mcp.tool()
 def load_network(file_path: str) -> Dict[str, Any]:
     """Load a PyPSA network from a NetCDF (.nc) file"""
+    try:
+        file_path = checked_path(file_path, purpose="file_path")
+    except PathNotAllowed as exc:
+        return {"status": "error", "message": str(exc)}
     try:
         network = Network(file_path)
         info = {
@@ -533,6 +538,10 @@ def optimize_investment(
 def import_from_csv_folder(folder_path: str) -> Dict[str, Any]:
     """Import network from CSV files"""
     try:
+        folder_path = checked_path(folder_path, purpose="folder_path")
+    except PathNotAllowed as exc:
+        return {"status": "error", "message": str(exc)}
+    try:
         network = Network()
         network.import_from_csv_folder(folder_path)
         network_name = os.path.basename(folder_path) + ".nc"
@@ -550,6 +559,10 @@ def import_from_csv_folder(folder_path: str) -> Dict[str, Any]:
 @mcp.tool()
 def export_to_csv_folder(network_name: str, folder_path: str) -> Dict[str, Any]:
     """Export network to CSV files"""
+    try:
+        folder_path = checked_path(folder_path, purpose="folder_path", for_write=True)
+    except PathNotAllowed as exc:
+        return {"status": "error", "message": str(exc)}
     try:
         network = Network(network_name)
         network.export_to_csv_folder(folder_path)
@@ -743,6 +756,14 @@ def import_case_from_any(
         warnings about dropped or adjusted data
     """
     try:
+        file_path = checked_path(file_path, purpose="file_path")
+    except PathNotAllowed as exc:
+        return {"status": "error", "message": str(exc)}
+    try:
+        output_path = checked_path(output_path, purpose="output_path", for_write=True)
+    except PathNotAllowed as exc:
+        return {"status": "error", "message": str(exc)}
+    try:
         import powerio
     except ImportError:
         return {"status": "error", "message": _POWERIO_HINT}
@@ -788,6 +809,10 @@ def import_case_from_json(
         Dict with status, the saved network_file path, component counts, and
         warnings about dropped or adjusted data
     """
+    try:
+        output_path = checked_path(output_path, purpose="output_path", for_write=True)
+    except PathNotAllowed as exc:
+        return {"status": "error", "message": str(exc)}
     try:
         import powerio
     except ImportError:

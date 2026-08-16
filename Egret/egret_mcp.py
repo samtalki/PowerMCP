@@ -10,6 +10,7 @@ import io
 import logging
 from contextlib import redirect_stdout, redirect_stderr
 import numpy as np
+from powermcp.sandbox import PathNotAllowed, checked_path
 
 # Configure logging to be less verbose
 logging.getLogger('egret').setLevel(logging.WARNING)
@@ -37,6 +38,10 @@ def solve_unit_commitment_problem(
     Returns:
         Dict containing the solution results
     """
+    try:
+        case_file = checked_path(case_file, purpose="case_file")
+    except PathNotAllowed as exc:
+        return {"status": "error", "message": str(exc)}
     try:
         # Completely capture both stdout and stderr
         f_out = io.StringIO()
@@ -90,6 +95,10 @@ def solve_ac_opf(
         Dict containing the solution results
     """
     try:
+        case_file = checked_path(case_file, purpose="case_file")
+    except PathNotAllowed as exc:
+        return {"status": "error", "message": str(exc)}
+    try:
         # Completely capture both stdout and stderr
         f_out = io.StringIO()
         f_err = io.StringIO()
@@ -142,6 +151,10 @@ def solve_dc_opf(
     Returns:
         Dict containing the solution results
     """
+    try:
+        case_file = checked_path(case_file, purpose="case_file")
+    except PathNotAllowed as exc:
+        return {"status": "error", "message": str(exc)}
     try:
         # Completely capture both stdout and stderr
         f_out = io.StringIO()
@@ -227,6 +240,10 @@ def load_model_from_any(file_path: str, source_format: Optional[str] = None) -> 
         Dict with status, the staged `case_file` path, model element counts,
         and powerio's fidelity warnings
     """
+    try:
+        file_path = checked_path(file_path, purpose="file_path")
+    except PathNotAllowed as exc:
+        return {"status": "error", "message": str(exc)}
     try:
         import powerio
     except ImportError:

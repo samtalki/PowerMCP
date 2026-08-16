@@ -3,6 +3,7 @@ import os
 from typing import Dict, List, Optional, Tuple, Any, Union
 from mcp.server.fastmcp import FastMCP
 from esa import SAW, PowerWorldError
+from powermcp.sandbox import PathNotAllowed, checked_path
 
 # Initialize MCP server
 mcp = FastMCP("PowerWorld Analysis Server")
@@ -34,6 +35,10 @@ def open_case(case_path: str) -> Dict[str, Any]:
     Returns:
         Dict with status and case information
     """
+    try:
+        case_path = checked_path(case_path, purpose="case_path")
+    except PathNotAllowed as exc:
+        return {"status": "error", "message": str(exc)}
     try:
         # Validate case_path input
         if not isinstance(case_path, str):

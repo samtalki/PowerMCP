@@ -2,6 +2,7 @@ from typing import Dict, List, Optional, Tuple, Any, Union
 import pandapower as pp
 from mcp.server.mcpserver import MCPServer as FastMCP
 import logging
+from powermcp.sandbox import PathNotAllowed, checked_path
 
 
 # Configure logging
@@ -64,6 +65,10 @@ def load_network(file_path: str) -> Dict[str, Any]:
     Returns:
         Dict containing status and network information
     """
+    try:
+        file_path = checked_path(file_path, purpose="file_path")
+    except PathNotAllowed as exc:
+        return {"status": "error", "message": str(exc)}
     logger.info(f"Loading network from file: {file_path}")
     global _current_net
     try:
@@ -398,6 +403,10 @@ def load_network_from_any(file_path: str, source_format: Optional[str] = None) -
     Returns:
         Dict containing status and network information
     """
+    try:
+        file_path = checked_path(file_path, purpose="file_path")
+    except PathNotAllowed as exc:
+        return {"status": "error", "message": str(exc)}
     logger.info(f"Loading network via powerio from: {file_path}")
     global _current_net
     try:
