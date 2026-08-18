@@ -59,6 +59,31 @@ GUARDED = {
     },
 }
 
+# Path-taking tools the policy does not reach yet, with the argument that gets
+# to the filesystem unchecked. Listed rather than ignored so the inventory
+# cannot rot: guarding one of these fails the test until it moves to GUARDED.
+# An operator who sets POWERIO_MCP_ALLOWED_ROOTS constrains the servers above
+# and none of these.
+UNGUARDED = {
+    "LTSpice/ltspice_mcp.py": {
+        # `open(log_file_path).read()` returned to the model verbatim.
+        "read_simulation_log": ["log_file_path"],
+        "list_available_traces": ["raw_file_path"],
+        "plot_specific_traces": ["raw_file_path"],
+        "run_simulation": ["netlist_path"],
+        "view_netlist_in_ltspice": ["netlist_path"],
+    },
+    "OpenDSS/opendss_tools/configuration.py": {
+        "compile_opendss_file": ["dss_file"],
+    },
+    "PSSE/psse_mcp.py": {
+        "open_case": ["case"],
+    },
+    "PSLF/pslf_mcp.py": {
+        "open_case": ["case"],
+    },
+}
+
 
 def test_the_policy_is_powerios(monkeypatch):
     """One implementation, not two that agree today.
@@ -155,34 +180,50 @@ def test_a_file_uri_decodes(tmp_path, monkeypatch):
     assert checked_path(case.as_uri(), purpose="file_path") == str(case)
 
 
-@pytest.mark.parametrize("server", sorted(GUARDED))
-def test_every_path_taking_tool_checks_its_argument(server):
-    """Read the server source rather than importing it.
+def _checked_arguments(server: str) -> dict[str, set[str]]:
+    """Per tool, the arguments assigned from a ``checked_path`` call.
 
-    A bridge server pulls in the simulator it wraps, which is not installed in
-    every environment, so importing to introspect would skip the check exactly
-    where it matters. The guard is a syntactic property and the AST shows it.
+    Reads the server source rather than importing it: a bridge server pulls in
+    the simulator it wraps, which is not installed in every environment, so
+    importing to introspect would skip the check exactly where it matters. The
+    guard is a syntactic property and the AST shows it.
     """
-    path = REPO / server
-    if not path.exists():
-        pytest.skip(f"{server} not present")
-    tree = ast.parse(path.read_text())
-    functions = {
-        node.name: node
+    tree = ast.parse((REPO / server).read_text())
+    return {
+        node.name: {
+            target.id
+            for inner in ast.walk(node)
+            if isinstance(inner, ast.Assign)
+            for target in inner.targets
+            if isinstance(target, ast.Name)
+            and isinstance(inner.value, ast.Call)
+            and isinstance(inner.value.func, ast.Name)
+            and inner.value.func.id == "checked_path"
+        }
         for node in ast.walk(tree)
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
+
+
+@pytest.mark.parametrize("server", sorted(GUARDED))
+def test_every_path_taking_tool_checks_its_argument(server):
+    if not (REPO / server).exists():
+        pytest.skip(f"{server} not present")
+    checked = _checked_arguments(server)
     for name, args in GUARDED[server].items():
-        assert name in functions, f"{server}: {name} is gone"
-        checked = {
-            target.id
-            for node in ast.walk(functions[name])
-            if isinstance(node, ast.Assign)
-            for target in node.targets
-            if isinstance(target, ast.Name)
-            and isinstance(node.value, ast.Call)
-            and isinstance(node.value.func, ast.Name)
-            and node.value.func.id == "checked_path"
-        }
-        missing = set(args) - checked
+        assert name in checked, f"{server}: {name} is gone"
+        missing = set(args) - checked[name]
         assert not missing, f"{server}: {name} does not check {sorted(missing)}"
+
+
+@pytest.mark.parametrize("server", sorted(UNGUARDED))
+def test_the_unguarded_inventory_is_accurate(server):
+    if not (REPO / server).exists():
+        pytest.skip(f"{server} not present")
+    checked = _checked_arguments(server)
+    for name, args in UNGUARDED[server].items():
+        assert name in checked, f"{server}: {name} is gone; drop it from UNGUARDED"
+        now_checked = set(args) & checked[name]
+        assert not now_checked, (
+            f"{server}: {name} now checks {sorted(now_checked)}; move it to GUARDED"
+        )
