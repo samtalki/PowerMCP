@@ -1,7 +1,7 @@
 import sys
 import os
 from typing import Dict, List, Optional, Tuple, Any, Union
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer as FastMCP
 from esa import SAW, PowerWorldError
 from powermcp.sandbox import PathNotAllowed, checked_path
 

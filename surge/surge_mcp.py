@@ -20,7 +20,7 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 import surge
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer as FastMCP
 from powermcp.sandbox import PathNotAllowed, checked_path
 
 logging.basicConfig(level=logging.INFO)

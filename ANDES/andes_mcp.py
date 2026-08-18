@@ -7,7 +7,7 @@ import shutil
 import json
 from pathlib import Path
 from contextlib import redirect_stdout, redirect_stderr
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer as FastMCP
 from typing import Dict, Any, Optional
 from powermcp.sandbox import PathNotAllowed, checked_path
 

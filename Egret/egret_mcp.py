@@ -1,6 +1,6 @@
 import sys
 import os
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer as FastMCP
 from egret.data.model_data import ModelData
 from egret.models.unit_commitment import solve_unit_commitment
 from egret.models.acopf import solve_acopf, create_psv_acopf_model

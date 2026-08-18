@@ -39,8 +39,6 @@ SERVER_DIRS = (
 # rename. Listed rather than skipped so the inventory cannot rot: a file that
 # gets migrated fails this test until it is removed from here.
 UNMIGRATED = {
-    "ANDES/andes_mcp.py": "rename only",
-    "Egret/egret_mcp.py": "rename only",
     "LTSpice/ltspice_mcp.py": "rename only",
     "OpenDSS/core/server.py": "rename only",
     "OpenDSS/opendss_tools/interactive_view.py": "rename only",
@@ -52,8 +50,6 @@ UNMIGRATED = {
     "PSCAD/pscad_mcp/tools/data_tools.py": "rename only",
     "PSCAD/pscad_mcp/tools/project_tools.py": "rename only",
     "PSCAD/pscad_mcp/tools/simset_tools.py": "rename only",
-    "PowerWorld/powerworld_mcp.py": "rename only",
-    "surge/surge_mcp.py": "rename only",
     # MCPServer takes neither host/port nor transport_security, and exposes no
     # settings.transport_security, so this one is a port rather than a rename.
     "HOPE/src/hope_mcp_server/server.py": "constructor and settings differ",
