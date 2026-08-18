@@ -39,10 +39,10 @@ class Tool:
     kind: str  # "open-source" | "closed-source"
     windows_only: bool
     extra: str | None  # pip extra that installs it; None for core (pandapower/pypsa)
-    server_dir: str  # top-level dir name, e.g. "PSSE"
-    run_kind: str  # "script" | "module"
+    server_dir: str | None  # top-level dir name, e.g. "PSSE"; None for run_kind=="package"
+    run_kind: str  # "script" | "module" | "package"
     entry_rel: str | None = None  # for run_kind=="script": path under server_dir
-    module: str | None = None  # for run_kind=="module": dotted module run with -m
+    module: str | None = None  # dotted module run with -m ("module" and "package")
     module_root_rel: str | None = None  # dir (under server_dir) to add to sys.path for the module
     probe: str | None = None  # importable linchpin dependency, for doctor
     config_keys: tuple[ConfigKey, ...] = field(default_factory=tuple)
@@ -53,6 +53,11 @@ class Tool:
     def resolve_server_dir(self) -> Path:
         """Return the on-disk server directory, working in all three layouts:
         installed wheel (powermcp/_servers/<dir>), editable install, raw checkout."""
+        if self.server_dir is None:
+            raise ValueError(
+                f"'{self.name}' ships its server in its own distribution "
+                f"('{self.module}'); this repo bundles no directory for it"
+            )
         # 1) installed wheel: shipped under the package as powermcp/_servers/<dir>
         try:
             packaged = Path(str(resources.files("powermcp"))) / "_servers" / self.server_dir
@@ -130,9 +135,13 @@ TOOLS: dict[str, "Tool"] = {
             ),
             external_solvers=("Julia",),
         ),
+        # powerio ships its own MCP server in its own wheel, so this repo runs
+        # that one rather than vendoring a copy: `powermcp run powerio` is
+        # `python -m powerio.mcp`. A powerio release that adds or renames a tool
+        # needs no edit here.
         Tool(
             "powerio", "PowerIO", "open-source", windows_only=False, extra=None,
-            server_dir="powerio", run_kind="script", entry_rel="powerio_mcp.py",
+            server_dir=None, run_kind="package", module="powerio.mcp",
             probe="powerio",
             notes="Format-neutral case conversion and matrix builder; the JSON transport is the cross-server exchange format. Core dependency: it is the cross-server exchange substrate the pandapower/Egret/PyPSA/ANDES bridges build on.",
         ),

@@ -1,11 +1,14 @@
 """Tests for the powerio conversion server, the PyPSA bridge, and the
 registry/runner wiring.
 
-powerio is a core dependency, so it is normally present; the importorskip below
-stays as insurance for stripped-down environments.
-The FastMCP-decorated tools stay ordinary callables, so we exercise them
-in-process without a transport. The launch test lives here rather than in
-test_runner.py so it skips with the rest of the module.
+The server under test is powerio's own ``powerio.mcp.server``: this repo runs
+that module and keeps no copy of it, so these tests are the consumer suite over
+a dependency's surface. powerio is a core dependency, so it is normally present;
+the importorskip below stays as insurance for stripped-down environments.
+The decorated tools stay ordinary callables, so most cases exercise them
+in-process; ``test_transport.py`` covers what only a real MCP transport shows.
+The launch test lives here rather than in test_runner.py so it skips with the
+rest of the module.
 
 tests/data/case9.m is vendored verbatim from
 https://github.com/MATPOWER/matpower/tree/master/data (BSD-3).
@@ -27,14 +30,9 @@ import pytest
 pytest.importorskip("powerio", minversion="0.9.0")
 
 import powerio  # noqa: E402
+from powerio.mcp import server as powerio_mcp  # noqa: E402
 
 from powermcp.registry import TOOLS  # noqa: E402
-
-_SERVER_DIR = str(TOOLS["powerio"].resolve_server_dir())
-if _SERVER_DIR not in sys.path:
-    sys.path.insert(0, _SERVER_DIR)
-
-import powerio_mcp  # noqa: E402
 
 _PYPSA_DIR = str(TOOLS["pypsa"].resolve_server_dir())
 if _PYPSA_DIR not in sys.path:
@@ -318,10 +316,16 @@ def test_registry_entry():
     t = TOOLS["powerio"]
     assert t.kind == "open-source"
     assert t.extra is None  # promoted to a core dependency (issue #30)
-    assert t.run_kind == "script"
     assert t.windows_only is False
     assert t.probe == "powerio"
-    assert t.resolve_entry_script().is_file()
+    # The server ships in powerio's own wheel, so there is no bundled dir here
+    # and no local file enumerating powerio's tool surface.
+    assert t.run_kind == "package"
+    assert t.module == "powerio.mcp"
+    assert t.server_dir is None
+    with pytest.raises(ValueError, match="own distribution"):
+        t.resolve_server_dir()
+    assert not (Path(__file__).resolve().parents[1] / "powerio").exists()
 
 
 @pytest.fixture()
@@ -340,8 +344,10 @@ def test_launch_powerio_runs_once(record_mcp_run):
 
     runner.launch("powerio")
     assert len(record_mcp_run) == 1
-    _, kwargs = record_mcp_run[0]
-    assert kwargs.get("transport") == "stdio"
+    args, kwargs = record_mcp_run[0]
+    # powerio's own entry point takes the SDK default rather than naming it.
+    transport = kwargs.get("transport") or (args[0] if args else "stdio")
+    assert transport == "stdio"
 
 
 def test_inline_convert_stages_no_temp_files(monkeypatch):

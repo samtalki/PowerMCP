@@ -2,7 +2,7 @@
 
 ``powermcp run <tool>`` resolves the tool via the registry and executes the
 original, unmodified server file — so the same code keeps working when run
-standalone from a checkout. Two launch styles (declared per tool in the
+standalone from a checkout. Three launch styles (declared per tool in the
 registry):
 
 - ``script``: run the entry .py as ``__main__`` (its own ``mcp.run(...)`` fires),
@@ -11,6 +11,9 @@ registry):
   ``from core.server import ...``) resolve exactly as in standalone use.
 - ``module``: put the module root on ``sys.path`` and ``runpy.run_module`` the
   package's ``__main__`` (PSCAD's ``pscad_mcp.main``, HOPE's ``hope_mcp_server``).
+- ``package``: ``runpy.run_module`` a server that ships in its own distribution
+  and is already importable (powerio's ``powerio.mcp``). Nothing goes on
+  ``sys.path`` and this repo bundles no copy of that server.
 """
 
 from __future__ import annotations
@@ -51,7 +54,9 @@ def probe_installed(probe: str | None) -> bool:
 def launch(name: str) -> None:
     tool = get_tool(name)
     _preflight(tool)
-    if tool.run_kind == "module":
+    if tool.run_kind == "package":
+        _launch_package(tool)
+    elif tool.run_kind == "module":
         _launch_module(tool)
     else:
         _launch_script(tool)
@@ -89,4 +94,10 @@ def _launch_module(tool: Tool) -> None:
     root = str(tool.resolve_module_root())
     if root not in sys.path:
         sys.path.insert(0, root)
+    runpy.run_module(tool.module, run_name="__main__", alter_sys=True)
+
+
+def _launch_package(tool: Tool) -> None:
+    # The server is a dependency, already on sys.path wherever pip put it, so
+    # there is no directory to resolve and nothing of ours to shadow it with.
     runpy.run_module(tool.module, run_name="__main__", alter_sys=True)

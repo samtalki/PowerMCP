@@ -46,9 +46,8 @@ dependencies = [
     # only scipy (already transitive via pandapower) on top of mcp+numpy.
     # >=0.9.0: 0.9.0 removed the deprecated Network/DistNetwork names outright,
     # so a floor that admits 0.4.x is a lie about what this repo runs against.
-    # The MCP tool surface is: convert, save, summary, parse, normalize,
-    # matrix, diagnostics, display. powerio_mcp.py re-exports exactly that
-    # surface with no local overlay.
+    # powerio ships the server itself (`python -m powerio.mcp`), so this repo
+    # bundles no copy of it and `powermcp run powerio` runs powerio's.
     "powerio[mcp,matrix]>=0.9.0",
     # CLI / installer toolkit:
     "typer>=0.12",
@@ -107,7 +106,6 @@ packages = ["powermcp"]
 "surge"        = "powermcp/_servers/surge"
 "OpenDSS"      = "powermcp/_servers/OpenDSS"
 "HOPE"         = "powermcp/_servers/HOPE"
-"powerio"      = "powermcp/_servers/powerio"
 "PSCAD"        = "powermcp/_servers/PSCAD"
 "PSSE"         = "powermcp/_servers/PSSE"
 "PSLF"         = "powermcp/_servers/PSLF"
@@ -120,7 +118,7 @@ packages = ["powermcp"]
 [tool.hatch.build.targets.sdist]
 include = [
     "powermcp",
-    "pandapower", "PyPSA", "ANDES", "Egret", "surge", "OpenDSS", "HOPE", "powerio",
+    "pandapower", "PyPSA", "ANDES", "Egret", "surge", "OpenDSS", "HOPE",
     "PSCAD", "PSSE", "PSLF", "PowerWorld", "PowerFactory", "LTSpice",
     "README.md", "LICENSE", "pyproject.toml",
 ]
