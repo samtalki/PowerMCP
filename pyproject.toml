@@ -50,6 +50,9 @@ dependencies = [
     # bundles no copy of it and `powermcp run powerio` runs powerio's.
     "powerio[mcp,matrix]>=0.9.0",
     # CLI / installer toolkit:
+    # packaging: the doctor compares an installed version against the floor
+    # declared right here, so it has to read a version specifier.
+    "packaging>=23",
     "typer>=0.12",
     "questionary>=2.0",
     "rich>=13",

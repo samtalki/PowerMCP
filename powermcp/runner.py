@@ -22,7 +22,7 @@ import importlib.util
 import runpy
 import sys
 
-from .registry import Tool, get_tool
+from .registry import Tool, get_tool, install_hint
 
 
 class LaunchError(RuntimeError):
@@ -67,13 +67,20 @@ def _preflight(tool: Tool) -> None:
         raise LaunchError(
             f"{tool.display} requires Windows-only software and cannot run on '{sys.platform}'."
         )
+    # Every server imports the MCP SDK at module scope, so without this the
+    # failure is a raw ImportError traceback rather than an actionable message.
+    if not probe_installed("mcp"):
+        raise LaunchError(
+            "The MCP SDK is not installed; every server needs it.\n"
+            "  Install it with:  pip install powermcp"
+        )
     # Only probe pip-provided linchpins. Vendor engines (PSS/E psspy, PSLF) have
     # probe=None: they live behind a captured path and report their own
     # actionable error from the server's lazy init.
     if tool.probe and not probe_installed(tool.probe):
         raise LaunchError(
             f"{tool.display}: required package '{tool.probe.split('.')[0]}' is not installed.\n"
-            f"  Install it with:  pip install powermcp[{tool.extra}]"
+            f"  Install it with:  {install_hint(tool.extra)}"
         )
 
 

@@ -221,6 +221,11 @@ TOOLS: dict[str, "Tool"] = {
 CORE: tuple[str, ...] = ("pandapower", "pypsa", "powerio")
 
 
+def install_hint(extra: str | None) -> str:
+    """The pip command that provides a tool. Core tools have no extra."""
+    return f"pip install powermcp[{extra}]" if extra else "pip install powermcp"
+
+
 def get_tool(name: str) -> "Tool":
     try:
         return TOOLS[name]

@@ -78,3 +78,51 @@ def test_run_doctor_smoke(capsys):
     doctor.run_doctor()  # should not raise
     out = capsys.readouterr().out
     assert "PowerMCP doctor" in out
+
+
+def test_install_hint_for_a_core_tool_names_no_extra():
+    # powerio and the other core tools have extra=None; the hint used to render
+    # `pip install powermcp[None]`, a command that does not exist.
+    from powermcp.registry import install_hint
+
+    assert install_hint(None) == "pip install powermcp"
+    assert install_hint("andes") == "pip install powermcp[andes]"
+
+
+def test_the_extra_survives_rich_markup(capsys):
+    # Rich reads a bracketed lowercase word as a style tag and drops it, so an
+    # unescaped hint printed the useless `pip install powermcp`.
+    doctor.run_doctor("andes")
+    out = capsys.readouterr().out
+    assert "[andes]" in out.replace("\n", "").replace(" ", "")
+
+
+def test_an_out_of_date_dependency_is_not_reported_ok(monkeypatch):
+    # find_spec answers "importable", which is not "new enough".
+    monkeypatch.setattr(doctor, "version", lambda name: "0.0.1")
+    style, msg = doctor._dep_status(get_tool("powerio"))
+    assert style == "red"
+    assert "below the required" in msg
+
+
+def test_the_shared_sdk_is_reported():
+    style, msg = doctor._sdk_status()
+    assert msg.startswith("mcp:")
+    assert style == "green"
+
+
+def test_containment_status_reads_every_root_spelling(tmp_path, monkeypatch):
+    from powermcp.sandbox import ALLOWED_ROOTS_ENV, LEGACY_ROOT_ENVS
+
+    for name in (ALLOWED_ROOTS_ENV,) + LEGACY_ROOT_ENVS:
+        monkeypatch.delenv(name, raising=False)
+    style, msg = doctor._containment_status()
+    assert style == "yellow" and "unconfined" in msg
+
+    monkeypatch.setenv(ALLOWED_ROOTS_ENV, str(tmp_path))
+    style, msg = doctor._containment_status()
+    assert style == "green" and str(tmp_path) in msg
+
+    monkeypatch.setenv(ALLOWED_ROOTS_ENV, str(tmp_path / "gone"))
+    style, msg = doctor._containment_status()
+    assert style == "red" and "every path is refused" in msg

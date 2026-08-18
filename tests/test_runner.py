@@ -93,3 +93,30 @@ def test_python_dash_m_powermcp_works():
     )
     assert r.returncode == 0, r.stderr
     assert "powermcp" in r.stdout
+
+
+def test_preflight_missing_sdk_raises(monkeypatch):
+    # Every server imports the MCP SDK at module scope, and a server that dies
+    # during import hands its MCP client nothing at all — the traceback goes to
+    # a stderr the client never reads. So the SDK is checked before launch.
+    real = runner.probe_installed
+    monkeypatch.setattr(
+        runner, "probe_installed", lambda p: False if p == "mcp" else real(p)
+    )
+    with pytest.raises(runner.LaunchError) as exc:
+        runner.launch("powerio")
+    assert "MCP SDK is not installed" in str(exc.value)
+
+
+def test_launch_powerio_runs_powerios_own_module(record_mcp_run, monkeypatch):
+    seen = []
+    real = runner.runpy.run_module
+
+    def spy(mod, **kwargs):
+        seen.append(mod)
+        return real(mod, **kwargs)
+
+    monkeypatch.setattr(runner.runpy, "run_module", spy)
+    runner.launch("powerio")
+    assert seen == ["powerio.mcp"]
+    assert len(record_mcp_run) == 1
