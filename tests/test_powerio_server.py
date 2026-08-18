@@ -511,9 +511,10 @@ def test_unreadable_file_maps_cleanly(tmp_path):
 
 def test_wrong_schema_json_maps_cleanly():
     # Wrong-schema (but well-formed) JSON keeps the one error shape too; the
-    # malformed-JSON case is covered above.
+    # malformed-JSON case is covered above. Pinned to the diagnostic code, since
+    # powerio 0.9.0 replaced the old "parse failed" prose with coded messages.
     for bad in ("{}", "[]", "null", '{"buses": "nope"}'):
-        with pytest.raises(ValueError, match="parse failed"):
+        with pytest.raises(ValueError, match=r"PARSE\.SOURCE\.MALFORMED"):
             powerio_mcp.matrix("bprime", json=bad, json_format="model-json")
 
 

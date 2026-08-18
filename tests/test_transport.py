@@ -4,9 +4,11 @@ the MCP SDK.
 Every other powerio test calls the tool functions in process, which skips the
 SDK's argument handling entirely. That gap hid a real defect: the SDK rewrites
 a string argument whose text parses as JSON into the parsed object before
-validation, so every `json` / `content` / `package_json` argument carrying JSON
-is destroyed before the tool sees it. Nothing in an in-process suite can see
-that, which is why this file drives the real transport.
+validation, which destroyed every `json` / `content` / `package_json` argument
+carrying JSON before the tool saw it. powerio 0.9.0 annotates those arguments as
+bare `str` on its registered tools, which is what stops the rewriting, and the
+tests below are what hold it closed. Nothing in an in-process suite can see any
+of this, which is why this file drives the real transport.
 
 Launching through `python -m powermcp run powerio` also covers the runner and
 registry wiring end to end, so a broken launch fails here rather than only for
@@ -88,7 +90,7 @@ def test_a_path_argument_survives_the_transport():
 
 def test_non_json_content_survives_the_transport():
     # MATPOWER text does not parse as JSON, so the SDK leaves it alone. This is
-    # the control for the two xfails below.
+    # the control for the two JSON carrying cases below.
     async def steps(session):
         return _payload(
             await session.call_tool(
@@ -104,16 +106,10 @@ def test_non_json_content_survives_the_transport():
     assert _run(steps)["text"]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "the MCP SDK parses a JSON-looking string into an object before "
-        "validating any argument not annotated exactly `str`, so every "
-        "Optional[str] transport argument on the powerio server is unusable "
-        "over a real transport"
-    ),
-)
 def test_the_json_transport_round_trips_over_the_transport():
+    # Recorded the SDK rewriting a string that parses as JSON, which made every
+    # argument not annotated exactly `str` unusable. powerio 0.9.0's bare `str`
+    # annotations close it for every mcp 2.x, so this now asserts the round trip.
     async def steps(session):
         parsed = _payload(await session.call_tool("parse", {"path": str(CASE9)}))
         assert parsed["json_format"] == "model-json"
@@ -126,10 +122,10 @@ def test_the_json_transport_round_trips_over_the_transport():
     assert _run(steps)["elements"]["buses"] == 9
 
 
-@pytest.mark.xfail(strict=True, reason="same SDK argument rewriting as above")
 def test_the_package_transport_reaches_summary_over_the_transport():
-    # `diagnostics` takes `package_json` as a required bare `str` and does work,
-    # so the same package text is accepted by one tool and refused by another.
+    # Same SDK rewriting as above. `diagnostics` always took `package_json` as a
+    # required bare `str`, so it kept working while `summary` refused the same
+    # package text; both take it now.
     async def steps(session):
         parsed = _payload(
             await session.call_tool(
