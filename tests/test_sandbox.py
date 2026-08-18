@@ -59,11 +59,9 @@ GUARDED = {
     },
 }
 
-# Path-taking tools the policy does not reach yet, with the argument that gets
-# to the filesystem unchecked. Listed rather than ignored so the inventory
-# cannot rot: guarding one of these fails the test until it moves to GUARDED.
-# An operator who sets POWERIO_MCP_ALLOWED_ROOTS constrains the servers above
-# and none of these.
+# Path-taking tools the policy does not reach: an operator who sets
+# POWERIO_MCP_ALLOWED_ROOTS constrains the servers above and none of these.
+# Guarding one fails the test until it moves to GUARDED.
 UNGUARDED = {
     "LTSpice/ltspice_mcp.py": {
         # `open(log_file_path).read()` returned to the model verbatim.
@@ -86,9 +84,9 @@ UNGUARDED = {
 
 
 def test_the_policy_is_powerios(monkeypatch):
-    """One implementation, not two that agree today.
+    """The policy has one implementation, which both sides reach by identity.
 
-    The drift this guards against already happened once: the two copies read
+    The drift this guards against already happened once: two copies read
     different environment variables, so an operator could configure containment
     and get it on one server and not another.
     """

@@ -17,10 +17,17 @@ stderr the client does not read — so the doctor has to catch it beforehand.
 from __future__ import annotations
 
 import os
+import re
 import sys
-from importlib.metadata import PackageNotFoundError, requires, version
+from importlib.metadata import (
+    PackageNotFoundError,
+    packages_distributions,
+    requires,
+    version,
+)
 
 from packaging.requirements import Requirement
+from packaging.version import InvalidVersion, Version
 from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
@@ -38,36 +45,58 @@ def _surge_supported() -> bool:
     return (3, 12) <= sys.version_info[:2] < (3, 15)
 
 
-def _declared_requirement(name: str) -> Requirement | None:
-    """This distribution's own declared requirement on ``name``, if it has one."""
+def _canonical(name: str) -> str:
+    """PEP 503 name, so `py_dss_toolkit` and `py-dss-toolkit` compare equal."""
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def _distributions(probe: str) -> list[str]:
+    """Distributions providing the importable ``probe``.
+
+    A probe is an import name and a requirement names a distribution; the two
+    differ often enough to matter (`yaml` from PyYAML, `surge` from surge-py).
+    Empty when nothing installed provides it, which is the missing case the
+    caller has already reported.
+    """
+    top = probe.split(".")[0]
+    return packages_distributions().get(top) or []
+
+
+def _declared_requirement(probe: str) -> Requirement | None:
+    """This project's own declared requirement on whatever provides ``probe``."""
     try:
         declared = requires("powermcp") or ()
     except PackageNotFoundError:
         return None
+    provided = {_canonical(d) for d in _distributions(probe)}
+    if not provided:
+        return None
     for raw in declared:
         req = Requirement(raw)
-        if req.name == name:
+        if _canonical(req.name) in provided and req.specifier:
             return req
     return None
 
 
-def _version_status(name: str) -> tuple[str, str] | None:
+def _version_status(probe: str) -> tuple[str, str] | None:
     """(style, message) when the installed version violates our declared floor.
 
     ``find_spec`` answers "importable", which is a different question from "new
     enough": an old powerio imports fine and then refuses tools this repo calls.
-    ``None`` when there is nothing to say — no declared floor, or it is met.
+    ``None`` when there is nothing to say — no declared floor, or it is met, or
+    the installed version does not parse and there is nothing to compare.
     """
-    req = _declared_requirement(name)
-    if req is None or not req.specifier:
+    req = _declared_requirement(probe)
+    if req is None:
         return None
     try:
-        installed = version(name)
-    except PackageNotFoundError:
+        installed = version(req.name)
+        Version(installed)
+    except (PackageNotFoundError, InvalidVersion):
         return None
     if req.specifier.contains(installed, prereleases=True):
         return None
-    return "red", f"{name} {installed} is below the required {name}{req.specifier}"
+    return "red", f"{req.name} {installed} is below the required {req.name}{req.specifier}"
 
 
 def _dep_status(t: Tool) -> tuple[str, str]:
@@ -110,10 +139,17 @@ def _containment_status() -> tuple[str, str]:
             f"{os.pathsep!r} separated list of directories to confine reads and writes"
         )
     missing = [str(r) for r in roots if not r.is_dir()]
-    if missing:
+    if len(missing) == len(roots):
         return "red", (
-            "MCP paths: confined to a directory that does not exist, so every "
-            "path is refused: " + ", ".join(missing)
+            "MCP paths: every configured root is a directory that does not "
+            "exist, so every path is refused: " + ", ".join(missing)
+        )
+    if missing:
+        return "yellow", (
+            "MCP paths: confined to "
+            + ", ".join(str(r) for r in roots)
+            + "; these do not exist and admit nothing: "
+            + ", ".join(missing)
         )
     return "green", "MCP paths: confined to " + ", ".join(str(r) for r in roots)
 

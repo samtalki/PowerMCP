@@ -30,6 +30,10 @@ from mcp.client.stdio import stdio_client  # noqa: E402
 
 CASE9 = Path(__file__).resolve().parent / "data" / "case9.m"
 
+# The SDK waits forever by default, so a server that starts and then blocks
+# would hang the suite with nothing to fail it.
+TIMEOUT = 60.0
+
 
 def _run(steps):
     """Drive one stdio session, returning whatever ``steps`` returns.
@@ -44,8 +48,9 @@ def _run(steps):
             env=dict(os.environ),
         )
         async with stdio_client(params) as (read, write):
-            async with ClientSession(read, write) as session:
-                await session.initialize()
+            async with ClientSession(read, write, read_timeout_seconds=TIMEOUT) as session:
+                # wait_for rather than asyncio.timeout: this runs on 3.10 too.
+                await asyncio.wait_for(session.initialize(), TIMEOUT)
                 return await steps(session)
 
     return asyncio.run(go())

@@ -135,10 +135,8 @@ TOOLS: dict[str, "Tool"] = {
             ),
             external_solvers=("Julia",),
         ),
-        # powerio ships its own MCP server in its own wheel, so this repo runs
-        # that one rather than vendoring a copy: `powermcp run powerio` is
-        # `python -m powerio.mcp`. A powerio release that adds or renames a tool
-        # needs no edit here.
+        # powerio ships its own MCP server, so this repo runs that one rather
+        # than vendoring a copy that has to restate powerio's tool names.
         Tool(
             "powerio", "PowerIO", "open-source", windows_only=False, extra=None,
             server_dir=None, run_kind="package", module="powerio.mcp",
