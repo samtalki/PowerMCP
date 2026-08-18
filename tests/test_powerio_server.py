@@ -74,7 +74,7 @@ def test_parse_json_round_trips():
     assert r["powerio_version"] == powerio.__version__
     assert r["domain"] == "transmission"
     assert r["model"] == "balanced"
-    assert r["json_format"] == "powerio-json"
+    assert r["json_format"] == "model-json"
     assert r["source_format"] == "Matpower"
     assert isinstance(r["warnings"], list)
     assert r["summary"]["elements"]["buses"] == 9
@@ -131,7 +131,7 @@ def test_matrix_bprime():
     assert m["powerio_version"] == powerio.__version__
     assert m["domain"] == "transmission"
     assert m["model"] == "balanced"
-    assert m["json_format"] == "powerio-json"
+    assert m["json_format"] == "model-json"
     assert m["source_format"] == "Matpower"
     assert isinstance(m["warnings"], list)
     assert m["format"] == "coo"
@@ -169,7 +169,7 @@ def test_summary_fields():
     assert s["powerio_version"] == powerio.__version__
     assert s["domain"] == "transmission"
     assert s["model"] == "balanced"
-    assert s["json_format"] == "powerio-json"
+    assert s["json_format"] == "model-json"
     assert isinstance(s["warnings"], list)
     assert s["elements"]["buses"] == 9
     assert s["base_mva"] == 100.0
@@ -508,7 +508,15 @@ def test_wrong_schema_json_maps_cleanly():
     # malformed-JSON case is covered above.
     for bad in ("{}", "[]", "null", '{"buses": "nope"}'):
         with pytest.raises(ValueError, match="parse failed"):
-            powerio_mcp.matrix("bprime", json=bad, json_format="powerio-json")
+            powerio_mcp.matrix("bprime", json=bad, json_format="model-json")
+
+
+def test_legacy_json_format_token_still_accepted():
+    # Responses state `model-json` since powerio 0.9, but the old `powerio-json`
+    # spelling stays valid as an input so an older client keeps working.
+    transport = powerio_mcp.parse(path=str(CASE9))["json"]
+    m = powerio_mcp.matrix("bprime", json=transport, json_format="powerio-json")
+    assert m["shape"] == [9, 9]
 
 
 # ---------------------------------------------------------------------------
