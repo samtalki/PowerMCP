@@ -73,7 +73,7 @@ def test_parse_json_round_trips():
     assert r["domain"] == "transmission"
     assert r["model"] == "balanced"
     assert r["json_format"] == "model-json"
-    assert r["source_format"] == "Matpower"
+    assert r["source_format"] == "matpower"
     assert isinstance(r["warnings"], list)
     assert r["summary"]["elements"]["buses"] == 9
     assert powerio.from_json(r["json"]).n_buses == 9
@@ -130,7 +130,7 @@ def test_matrix_bprime():
     assert m["domain"] == "transmission"
     assert m["model"] == "balanced"
     assert m["json_format"] == "model-json"
-    assert m["source_format"] == "Matpower"
+    assert m["source_format"] == "matpower"
     assert isinstance(m["warnings"], list)
     assert m["format"] == "coo"
     assert m["shape"] == [9, 9]
@@ -171,7 +171,7 @@ def test_summary_fields():
     assert isinstance(s["warnings"], list)
     assert s["elements"]["buses"] == 9
     assert s["base_mva"] == 100.0
-    assert s["source_format"] == "Matpower"
+    assert s["source_format"] == "matpower"
     assert s["topology"]["connected_components"] == 1
     assert s["elements"]["branches"] == 9
     assert s["topology"]["connectivity_report"]
