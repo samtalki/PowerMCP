@@ -24,15 +24,12 @@ from __future__ import annotations
 from powerio.mcp.sandbox import (
     ALLOWED_ROOTS_ENV,
     LEGACY_ROOT_ENVS,
+    PathNotAllowed,
     allowed_roots,
     check_allowed_path,
     checked_path,
     decode_local_path,
 )
-
-# powerio signals a refusal with a plain ValueError. The alias keeps the bridge
-# servers reading as intent; narrow it to a dedicated type if powerio grows one.
-PathNotAllowed = ValueError
 
 __all__ = [
     "ALLOWED_ROOTS_ENV",
