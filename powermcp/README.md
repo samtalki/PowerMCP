@@ -18,9 +18,10 @@ Requires **Python 3.10+**.
 pip install powermcp
 ```
 
-The base install includes **pandapower**, **PyPSA**, and the **PowerIO** conversion
-server with PowerMCP's `.pio.json` package workflow tools. Everything else is
-opt-in via an extra:
+The base install includes **pandapower**, **PyPSA**, and the canonical **PowerIO**
+conversion server. PowerIO `.pio.json` packages can be handed directly to the
+solver bridges, with explicit operating-point or study-commit selection when a
+package contains multiple states. Everything else is opt-in via an extra:
 
 ```bash
 pip install "powermcp[psse]"            # one tool

@@ -1,9 +1,10 @@
-"""Tests for the PowerMCP-extended PowerIO server, solver bridges, and wiring.
+"""Tests for the powerio conversion server, the PyPSA bridge, and the
+registry/runner wiring.
 
-The eight canonical tools still come from ``powerio.mcp.server``. PowerMCP
-registers package workflow tools on that server and shares the resulting MCP
-surface. powerio is a core dependency, so it is normally present; the
-importorskip below stays as insurance for stripped-down environments.
+The server under test is powerio's own ``powerio.mcp.server``: this repo runs
+that module and keeps no copy of it, so these tests are the consumer suite over
+a dependency's surface. powerio is a core dependency, so it is normally present;
+the importorskip below stays as insurance for stripped-down environments.
 The decorated tools stay ordinary callables, so most cases exercise them
 in-process; ``test_transport.py`` covers what only a real MCP transport shows.
 The launch test lives here rather than in test_runner.py so it skips with the
@@ -33,7 +34,6 @@ pytest.importorskip("powerio", minversion="0.9.0")
 import powerio  # noqa: E402
 from powerio.mcp import server as powerio_mcp  # noqa: E402
 
-from powermcp import powerio_server as powermcp_powerio  # noqa: E402
 from powermcp.registry import TOOLS  # noqa: E402
 
 _PYPSA_DIR = str(TOOLS["pypsa"].resolve_server_dir())
@@ -81,7 +81,7 @@ def test_parse_json_round_trips():
     assert powerio.from_json(r["json"]).n_buses == 9
 
 
-def test_tool_surface_keeps_canonical_tools_and_adds_package_workflows():
+def test_tool_surface_is_canonical():
     tools = {tool.name: tool for tool in asyncio.run(powerio_mcp.mcp.list_tools())}
     names = set(tools)
     assert names == {
@@ -93,10 +93,6 @@ def test_tool_surface_keeps_canonical_tools_and_adds_package_workflows():
         "matrix",
         "diagnostics",
         "display",
-        "package_case",
-        "inspect_package",
-        "materialize_package",
-        "lower_package",
     }
     for name in ("parse", "summary", "normalize", "matrix", "display"):
         props = tools[name].input_schema["properties"]
@@ -268,31 +264,35 @@ def test_package_transport_flows_through_core_tools(tmp_path):
     assert isinstance(diag["diagnostics"], list)
 
 
-def test_powermcp_package_case_inspects_and_writes(tmp_path):
-    out = tmp_path / "case9.pio.json"
-    result = powermcp_powerio.package_case(path=str(CASE9), out_path=str(out))
+def test_pypsa_handoff_accepts_static_package(tmp_path):
+    package_json = powerio.Package.from_file(CASE9).to_json()
+    out = tmp_path / "case9-package.nc"
+    result = pypsa_mcp.import_case_from_json(package_json, str(out))
 
-    assert result["schema"] == "powermcp.package"
-    assert result["model_kind"] == "balanced"
-    assert result["json_format"] == "model-json"
-    assert result["path"] == str(out)
-    assert out.read_text() == result["package_json"]
-    assert powerio.from_json(result["json"]).n_buses == 9
+    assert result["status"] == "success", result
+    assert result["package"]["model_kind"] == "balanced"
+    assert result["package"]["source_map_entries"] > 0
+    assert len(pypsa.Network(str(out)).buses) == 9
 
-    inspection = powermcp_powerio.inspect_package(
-        package_json=result["package_json"]
+
+def test_pandapower_handoff_accepts_static_package():
+    panda_dir = str(TOOLS["pandapower"].resolve_server_dir())
+    if panda_dir not in sys.path:
+        sys.path.insert(0, panda_dir)
+    import panda_mcp  # noqa: E402
+
+    result = panda_mcp.load_network_from_json(
+        powerio.Package.from_file(CASE9).to_json()
     )
-    assert inspection["schema"] == "powermcp.package-inspection"
-    assert inspection["source_maps"]["entries"] > 0
-    assert inspection["source_maps"]["mapping_kinds"]["exact"] > 0
-    assert inspection["operating_points"] is None
-    assert "package_json" not in inspection
+
+    assert result["status"] == "success", result
+    assert result["package"]["model_kind"] == "balanced"
+    assert len(panda_mcp._current_net.bus) == 9
 
 
-def test_powermcp_materializes_operating_point_for_solver_handoff():
-    packaged = powermcp_powerio.package_case(path=str(CASE9))
-    pkg = powerio.Package.from_json(packaged["package_json"])
-    pkg.set_operating_points(
+def test_solver_handoff_requires_explicit_package_state(tmp_path):
+    package = powerio.Package.from_file(CASE9)
+    package.set_operating_points(
         {
             "time_axis": {"periods": 1, "labels": ["dispatch"]},
             "points": [
@@ -312,57 +312,52 @@ def test_powermcp_materializes_operating_point_for_solver_handoff():
         }
     )
 
-    result = powermcp_powerio.materialize_package(
-        package_json=pkg.to_json(), operating_point=0
+    rejected = pypsa_mcp.import_case_from_json(
+        package.to_json(), str(tmp_path / "unselected.nc")
     )
-    assert result["materialized"] == {"kind": "operating_point", "index": 0}
-    assert result["inspection"]["operating_points"] is None
-    assert powerio.from_json(result["json"]).generators[0]["pg"] == pytest.approx(
-        123.0
+    assert rejected["status"] == "error"
+    assert "operating_point from [0]" in rejected["message"]
+
+    out = tmp_path / "selected.nc"
+    selected = pypsa_mcp.import_case_from_json(
+        package.to_json(), str(out), operating_point=0
     )
+    assert selected["status"] == "success", selected
+    assert selected["package"]["materialized"] == {
+        "kind": "operating_point",
+        "index": 0,
+    }
+    assert pypsa.Network(str(out)).generators.iloc[0].p_set == pytest.approx(123.0)
 
 
-def test_pypsa_bridge_accepts_static_package(tmp_path):
-    packaged = powermcp_powerio.package_case(path=str(CASE9))
-    out = tmp_path / "case9-package.nc"
-    result = pypsa_mcp.import_case_from_json(packaged["package_json"], str(out))
+def test_solver_handoff_materializes_study_commit(tmp_path):
+    package = powerio.Package.from_file(CASE9)
+    document = json.loads(package.to_json())
+    document["study"] = {
+        "label": "load study",
+        "commits": [
+            {
+                "label": "add load",
+                "edits": [
+                    {
+                        "kind": "demand_delta",
+                        "bus": {"table": "buses", "source_uid": "buses:0"},
+                        "p_mw": 7.0,
+                        "q_mvar": 3.0,
+                    }
+                ],
+            }
+        ],
+    }
 
-    assert result["status"] == "success", result
-    assert result["package"]["model_kind"] == "balanced"
-    assert result["package"]["source_map_entries"] > 0
-    assert len(pypsa.Network(str(out)).buses) == 9
-
-
-def test_pandapower_bridge_accepts_static_package():
-    panda_dir = str(TOOLS["pandapower"].resolve_server_dir())
-    if panda_dir not in sys.path:
-        sys.path.insert(0, panda_dir)
-    import panda_mcp  # noqa: E402
-
-    packaged = powermcp_powerio.package_case(path=str(CASE9))
-    result = panda_mcp.load_network_from_json(packaged["package_json"])
-
-    assert result["status"] == "success", result
-    assert result["package"]["model_kind"] == "balanced"
-    assert result["package"]["source_map_entries"] > 0
-    assert len(panda_mcp._current_net.bus) == 9
-
-
-def test_solver_bridge_requires_explicit_package_materialization(tmp_path):
-    packaged = powermcp_powerio.package_case(path=str(CASE9))
-    pkg = powerio.Package.from_json(packaged["package_json"])
-    pkg.set_operating_points(
-        {
-            "time_axis": {"periods": 1},
-            "points": [{"index": 0, "updates": []}],
-        }
-    )
-
+    out = tmp_path / "study.nc"
     result = pypsa_mcp.import_case_from_json(
-        pkg.to_json(), str(tmp_path / "should-not-exist.nc")
+        json.dumps(document), str(out), study_commit=0
     )
-    assert result["status"] == "error"
-    assert "materialize_package" in result["message"]
+
+    assert result["status"] == "success", result
+    assert result["package"]["materialized"] == {"kind": "study_commit", "index": 0}
+    assert (pypsa.Network(str(out)).loads.p_set == 7.0).any()
 
 
 def test_save_exactly_one_input(tmp_path):
@@ -395,8 +390,7 @@ def test_pypsa_import_preserves_supported_generator_costs(tmp_path):
     out = tmp_path / "costs.nc"
     result = pypsa_mcp.import_case_from_any(str(CASE9), str(out))
     assert result["status"] == "success", result
-    network = pypsa.Network(str(out))
-    assert (network.generators.marginal_cost != 0).all()
+    assert (pypsa.Network(str(out)).generators.marginal_cost != 0).all()
 
 
 def test_pypsa_import_overwrite_zero_s_nom(tmp_path):
@@ -494,12 +488,12 @@ def test_registry_entry():
     assert t.extra is None  # promoted to a core dependency (issue #30)
     assert t.windows_only is False
     assert t.probe == "powerio"
-    # The canonical server ships in powerio's wheel. PowerMCP's importable
-    # extension module registers package workflow tools without a server dir.
+    # The server ships in powerio's own wheel, so there is no bundled dir here
+    # and no local file enumerating powerio's tool surface.
     assert t.run_kind == "package"
-    assert t.module == "powermcp.powerio_server"
+    assert t.module == "powerio.mcp"
     assert t.server_dir is None
-    with pytest.raises(ValueError, match="importable module"):
+    with pytest.raises(ValueError, match="own distribution"):
         t.resolve_server_dir()
     assert not (Path(__file__).resolve().parents[1] / "powerio").exists()
 
@@ -521,7 +515,7 @@ def test_launch_powerio_runs_once(record_mcp_run):
     runner.launch("powerio")
     assert len(record_mcp_run) == 1
     args, kwargs = record_mcp_run[0]
-    # The extension keeps the SDK default transport.
+    # powerio's own entry point takes the SDK default rather than naming it.
     transport = kwargs.get("transport") or (args[0] if args else "stdio")
     assert transport == "stdio"
 

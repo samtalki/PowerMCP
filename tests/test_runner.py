@@ -108,7 +108,7 @@ def test_preflight_missing_sdk_raises(monkeypatch):
     assert "MCP SDK is not installed" in str(exc.value)
 
 
-def test_launch_powerio_runs_powermcp_extension_module(record_mcp_run, monkeypatch):
+def test_launch_powerio_runs_powerios_own_module(record_mcp_run, monkeypatch):
     seen = []
     real = runner.runpy.run_module
 
@@ -118,5 +118,5 @@ def test_launch_powerio_runs_powermcp_extension_module(record_mcp_run, monkeypat
 
     monkeypatch.setattr(runner.runpy, "run_module", spy)
     runner.launch("powerio")
-    assert seen == ["powermcp.powerio_server"]
+    assert seen == ["powerio.mcp"]
     assert len(record_mcp_run) == 1

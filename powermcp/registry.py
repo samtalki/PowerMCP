@@ -55,8 +55,8 @@ class Tool:
         installed wheel (powermcp/_servers/<dir>), editable install, raw checkout."""
         if self.server_dir is None:
             raise ValueError(
-                f"'{self.name}' runs as an importable module ('{self.module}'); "
-                "there is no bundled server directory to resolve"
+                f"'{self.name}' ships its server in its own distribution "
+                f"('{self.module}'); this repo bundles no directory for it"
             )
         # 1) installed wheel: shipped under the package as powermcp/_servers/<dir>
         try:
@@ -135,14 +135,13 @@ TOOLS: dict[str, "Tool"] = {
             ),
             external_solvers=("Julia",),
         ),
-        # PowerMCP extends the MCP server shipped by powerio with package
-        # workflow tools. The canonical tools still come directly from
-        # powerio; this module only registers the PowerMCP-specific additions.
+        # powerio ships its own MCP server, so this repo runs that one rather
+        # than vendoring a copy that has to restate powerio's tool names.
         Tool(
             "powerio", "PowerIO", "open-source", windows_only=False, extra=None,
-            server_dir=None, run_kind="package", module="powermcp.powerio_server",
+            server_dir=None, run_kind="package", module="powerio.mcp",
             probe="powerio",
-            notes="Format-neutral conversion, matrices, and auditable .pio.json workflows. Static packages load directly in the pandapower/Egret/PyPSA/ANDES bridges; operating points and study commits materialize explicitly before a solve.",
+            notes="Format-neutral conversion, matrices, and auditable .pio.json packages. Its canonical MCP server owns package operations; pandapower, PyPSA, Egret, and ANDES select package states only at solver handoff.",
         ),
         # ---- CLOSED-SOURCE / VENDOR ----
         Tool(

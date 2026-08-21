@@ -7,7 +7,7 @@ from pypsa import Network
 import numpy as np
 import pandas as pd
 from typing import Dict, List, Optional, Union, Any
-from powermcp.powerio_bridge import load_balanced_json, load_balanced_path
+from powermcp.powerio_handoff import prepare_balanced_file, prepare_balanced_json
 from powermcp.sandbox import (
     PathNotAllowed,
     checked_path,
@@ -616,11 +616,8 @@ def export_to_csv_folder(network_name: str, folder_path: str) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# powerio bridge: import any powerio readable case as a PyPSA network.
-# powerio parses MATPOWER .m, PSS/E .raw (v33), PowerWorld .aux, PowerModels
-# JSON, and egret JSON. PowerIO writes its validated native PyPSA CSV surface;
-# PyPSA imports that folder and the network is saved to a .nc file whose path
-# the other tools accept as network_name. powerio is a core dependency.
+# PowerIO handoff: prepare one balanced state, use PowerIO's native PyPSA CSV
+# writer, then save the PyPSA network to the NetCDF path used by other tools.
 # ---------------------------------------------------------------------------
 
 def _import_case_to_netcdf(case, output_path: str, overwrite_zero_s_nom: Optional[float]):
@@ -665,17 +662,16 @@ def import_case_from_any(
     output_path: str,
     source_format: Optional[str] = None,
     overwrite_zero_s_nom: Optional[float] = None,
+    operating_point: Optional[int] = None,
+    study_commit: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Import any balanced PowerIO case as a PyPSA network saved to NetCDF.
+    """Import any powerio readable case file as a PyPSA network saved to a
+    NetCDF file.
 
-    Accepts every balanced format PowerIO supports, including a static
-    ``.pio.json`` package. A package carrying operating points or study commits
-    must first be materialized with the PowerMCP PowerIO server. Writes a PyPSA
-    network to output_path (use a .nc extension); pass that path as network_name
-    to the other tools. Anything the PowerIO-to-PyPSA conversion cannot
-    represent is listed in the returned warnings. Branches with rating 0 keep
-    s_nom 0 unless overwrite_zero_s_nom supplies a value. powerio is a core
-    dependency, so this is always available.
+    Reads any balanced PowerIO format or a ``.pio.json`` package and writes a
+    PyPSA network to output_path. For a package with multiple states, select
+    exactly one operating_point or study_commit; PowerIO materializes it first.
+    PowerIO's native PyPSA writer preserves supported costs and element status.
 
     Args:
         file_path: Path to the case file
@@ -684,10 +680,12 @@ def import_case_from_any(
             egret-json, psse, powerworld); inferred from the file extension
             when omitted
         overwrite_zero_s_nom: Replacement s_nom for branches with rating 0
+        operating_point: Optional package operating-point index to materialize
+        study_commit: Optional package study-commit index to materialize
 
     Returns:
         Dict with status, the saved network_file path, component counts, and
-        PowerIO fidelity warnings and any rating adjustment
+        warnings about dropped or adjusted data
     """
     try:
         file_path = checked_path(file_path, purpose="file_path")
@@ -698,11 +696,16 @@ def import_case_from_any(
     except PathNotAllowed as exc:
         return {"status": "error", "message": str(exc)}
     try:
-        loaded = load_balanced_path(file_path, source_format)
-        info, warnings = _import_case_to_netcdf(
-            loaded.network, output_path, overwrite_zero_s_nom
+        prepared = prepare_balanced_file(
+            file_path,
+            source_format,
+            operating_point=operating_point,
+            study_commit=study_commit,
         )
-        warnings = list(loaded.warnings) + warnings
+        info, warnings = _import_case_to_netcdf(
+            prepared.network, output_path, overwrite_zero_s_nom
+        )
+        warnings = list(prepared.warnings) + warnings
     except FileNotFoundError:
         return {"status": "error", "message": f"File not found: {file_path}"}
     except Exception as e:
@@ -713,7 +716,7 @@ def import_case_from_any(
         "network_file": output_path,
         "info": info,
         "warnings": warnings,
-        **({"package": loaded.package} if loaded.package is not None else {}),
+        **({"package": prepared.package} if prepared.package is not None else {}),
     }
 
 
@@ -722,8 +725,11 @@ def import_case_from_json(
     network_json: str,
     output_path: str,
     overwrite_zero_s_nom: Optional[float] = None,
+    operating_point: Optional[int] = None,
+    study_commit: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Import PowerIO model JSON or a static package as a PyPSA network.
+    """Import a powerio JSON transport string as a PyPSA network saved to a
+    NetCDF file.
 
     Accepts the `json` string returned by the powerio server's parse tool,
     so a case parsed once there loads here without passing a file around or
@@ -737,21 +743,27 @@ def import_case_from_json(
         network_json: The JSON transport string from powerio
         output_path: Where to save the imported network (.nc)
         overwrite_zero_s_nom: Replacement s_nom for branches with rating 0
+        operating_point: Optional package operating-point index to materialize
+        study_commit: Optional package study-commit index to materialize
 
     Returns:
         Dict with status, the saved network_file path, component counts, and
-        PowerIO fidelity warnings and any rating adjustment
+        warnings about dropped or adjusted data
     """
     try:
         output_path = checked_path(output_path, purpose="output_path", for_write=True)
     except PathNotAllowed as exc:
         return {"status": "error", "message": str(exc)}
     try:
-        loaded = load_balanced_json(network_json)
-        info, warnings = _import_case_to_netcdf(
-            loaded.network, output_path, overwrite_zero_s_nom
+        prepared = prepare_balanced_json(
+            network_json,
+            operating_point=operating_point,
+            study_commit=study_commit,
         )
-        warnings = list(loaded.warnings) + warnings
+        info, warnings = _import_case_to_netcdf(
+            prepared.network, output_path, overwrite_zero_s_nom
+        )
+        warnings = list(prepared.warnings) + warnings
     except Exception as e:
         return {"status": "error", "message": f"Failed to import case: {str(e)}"}
     return {
@@ -760,7 +772,7 @@ def import_case_from_json(
         "network_file": output_path,
         "info": info,
         "warnings": warnings,
-        **({"package": loaded.package} if loaded.package is not None else {}),
+        **({"package": prepared.package} if prepared.package is not None else {}),
     }
 
 

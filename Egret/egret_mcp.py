@@ -10,7 +10,7 @@ import io
 import logging
 from contextlib import redirect_stdout, redirect_stderr
 import numpy as np
-from powermcp.powerio_bridge import load_balanced_json, load_balanced_path
+from powermcp.powerio_handoff import prepare_balanced_file, prepare_balanced_json
 from powermcp.sandbox import PathNotAllowed, checked_path
 
 # Configure logging to be less verbose
@@ -196,12 +196,10 @@ def solve_dc_opf(
         }
 
 # ---------------------------------------------------------------------------
-# powerio bridge: ingest any powerio readable case into egret.
-# powerio converts MATPOWER .m, PSS/E .raw (v33), PowerWorld .aux, PowerModels
-# JSON, or its own JSON transport to egret JSON; the staged file feeds the
-# solver tools above, which only accept case_file paths. powerio is a core
-# PowerMCP dependency.
+# PowerIO handoff: prepare one balanced state, convert it to Egret JSON, and
+# stage the file consumed by the solver tools above.
 # ---------------------------------------------------------------------------
+
 
 def _ensure_egret_runs_dir() -> str:
     from pathlib import Path
@@ -251,13 +249,17 @@ def _stage_egret_model(egret_json_text: str):
 
 
 @mcp.tool()
-def load_model_from_any(file_path: str, source_format: Optional[str] = None) -> Dict[str, Any]:
-    """Convert any balanced PowerIO case into an egret model.
+def load_model_from_any(
+    file_path: str,
+    source_format: Optional[str] = None,
+    operating_point: Optional[int] = None,
+    study_commit: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Convert any powerio readable case file into an egret model.
 
-    Accepts every balanced format PowerIO supports, including a static
-    ``.pio.json`` package. A package carrying operating points or study commits
-    must first be materialized with the PowerMCP PowerIO server. The model is
-    converted to egret JSON, validated as ModelData, and staged. Pass the returned
+    Reads any balanced PowerIO format or a ``.pio.json`` package, converts one
+    selected state to Egret JSON, validates it as ModelData, and stages it. For
+    a package with multiple states, select operating_point or study_commit. Pass the returned
     `case_file` path to solve_ac_opf, solve_dc_opf, or
     solve_unit_commitment_problem. powerio is a core dependency, so this is
     always available.
@@ -267,6 +269,8 @@ def load_model_from_any(file_path: str, source_format: Optional[str] = None) -> 
         source_format: Input format name (matpower, powermodels-json,
             egret-json, psse, powerworld); inferred from the file extension
             when omitted
+        operating_point: Optional package operating-point index to materialize
+        study_commit: Optional package study-commit index to materialize
 
     Returns:
         Dict with status, the staged `case_file` path, model element counts,
@@ -277,8 +281,13 @@ def load_model_from_any(file_path: str, source_format: Optional[str] = None) -> 
     except PathNotAllowed as exc:
         return {"status": "error", "message": str(exc)}
     try:
-        loaded = load_balanced_path(file_path, source_format)
-        conv = loaded.network.to_format("egret-json")
+        prepared = prepare_balanced_file(
+            file_path,
+            source_format,
+            operating_point=operating_point,
+            study_commit=study_commit,
+        )
+        conv = prepared.network.to_format("egret-json")
         path, info = _stage_egret_model(conv.text)
     except FileNotFoundError:
         return {"status": "error", "message": f"File not found: {file_path}"}
@@ -288,14 +297,18 @@ def load_model_from_any(file_path: str, source_format: Optional[str] = None) -> 
         "status": "success",
         "case_file": path,
         "model_info": info,
-        "warnings": list(loaded.warnings) + list(conv.warnings),
-        **({"package": loaded.package} if loaded.package is not None else {}),
+        "warnings": list(prepared.warnings) + list(conv.warnings),
+        **({"package": prepared.package} if prepared.package is not None else {}),
     }
 
 
 @mcp.tool()
-def load_model_from_json(network_json: str) -> Dict[str, Any]:
-    """Convert PowerIO model JSON or a static package into an egret model.
+def load_model_from_json(
+    network_json: str,
+    operating_point: Optional[int] = None,
+    study_commit: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Convert PowerIO model JSON or one package state into an Egret model.
 
     Accepts the `json` string returned by the powerio server's parse tool,
     so a case parsed once there feeds egret without re-reading the file.
@@ -306,14 +319,20 @@ def load_model_from_json(network_json: str) -> Dict[str, Any]:
 
     Args:
         network_json: The JSON transport string from powerio
+        operating_point: Optional package operating-point index to materialize
+        study_commit: Optional package study-commit index to materialize
 
     Returns:
         Dict with status, the staged `case_file` path, model element counts,
         and powerio's fidelity warnings
     """
     try:
-        loaded = load_balanced_json(network_json)
-        conv = loaded.network.to_format("egret-json")
+        prepared = prepare_balanced_json(
+            network_json,
+            operating_point=operating_point,
+            study_commit=study_commit,
+        )
+        conv = prepared.network.to_format("egret-json")
         path, info = _stage_egret_model(conv.text)
     except Exception as e:
         return {"status": "error", "message": str(e)}
@@ -321,8 +340,8 @@ def load_model_from_json(network_json: str) -> Dict[str, Any]:
         "status": "success",
         "case_file": path,
         "model_info": info,
-        "warnings": list(loaded.warnings) + list(conv.warnings),
-        **({"package": loaded.package} if loaded.package is not None else {}),
+        "warnings": list(prepared.warnings) + list(conv.warnings),
+        **({"package": prepared.package} if prepared.package is not None else {}),
     }
 
 

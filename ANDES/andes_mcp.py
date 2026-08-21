@@ -9,7 +9,7 @@ from pathlib import Path
 from contextlib import redirect_stdout, redirect_stderr
 from mcp.server.mcpserver import MCPServer as FastMCP
 from typing import Dict, Any, Optional
-from powermcp.powerio_bridge import load_balanced_json, load_balanced_path
+from powermcp.powerio_handoff import prepare_balanced_file, prepare_balanced_json
 from powermcp.sandbox import PathNotAllowed, checked_path, checked_read_tree
 
 # Storage directory resolved lazily (no filesystem writes at import time)
@@ -387,18 +387,19 @@ def get_system_info() -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# powerio bridge: load any powerio readable case into ANDES.
-# powerio parses MATPOWER .m, PSS/E .raw (v33), PowerWorld .aux, PowerModels
-# JSON, and egret JSON; the case is staged as a MATPOWER file that ANDES loads
-# natively via run_power_flow. powerio is a core PowerMCP dependency.
+# PowerIO handoff: prepare one balanced state, then stage MATPOWER text for
+# ANDES to load natively through run_power_flow.
 # ---------------------------------------------------------------------------
+
 
 @mcp.tool()
 def load_network_from_json(
     network_json: str,
     out_path: str,
+    operating_point: Optional[int] = None,
+    study_commit: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Stage PowerIO model JSON or a static package as MATPOWER for ANDES.
+    """Stage PowerIO model JSON or one package state as MATPOWER for ANDES.
 
     Accepts the ``json`` string returned by the powerio server's parse tool.
     Converts the network to MATPOWER format, writes it to out_path (use a .m
@@ -409,6 +410,8 @@ def load_network_from_json(
     Args:
         network_json: The JSON transport string from powerio
         out_path: Destination for the MATPOWER case file (.m)
+        operating_point: Optional package operating-point index to materialize
+        study_commit: Optional package study-commit index to materialize
 
     Returns:
         Dict with status, case_file path, component counts, and fidelity warnings
@@ -418,8 +421,12 @@ def load_network_from_json(
     except PathNotAllowed as exc:
         return {"status": "error", "message": str(exc)}
     try:
-        loaded = load_balanced_json(network_json)
-        case = loaded.network
+        prepared = prepare_balanced_json(
+            network_json,
+            operating_point=operating_point,
+            study_commit=study_commit,
+        )
+        case = prepared.network
         conv = case.to_format("matpower")
         abs_out = os.path.abspath(out_path)
         with open(abs_out, "w") as fh:
@@ -435,8 +442,8 @@ def load_network_from_json(
             "branches": case.n_branches,
             "generators": case.n_gens,
         },
-        "warnings": list(loaded.warnings) + list(conv.warnings),
-        **({"package": loaded.package} if loaded.package is not None else {}),
+        "warnings": list(prepared.warnings) + list(conv.warnings),
+        **({"package": prepared.package} if prepared.package is not None else {}),
     }
 
 
@@ -445,19 +452,23 @@ def load_network_from_any(
     file_path: str,
     out_path: str,
     source_format: Optional[str] = None,
+    operating_point: Optional[int] = None,
+    study_commit: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Stage any balanced PowerIO case as a MATPOWER file for ANDES.
+    """Stage any powerio readable case as a MATPOWER file for ANDES.
 
-    Accepts every balanced format PowerIO supports, including a static
-    ``.pio.json`` package. A package carrying operating points or study commits
-    must first be materialized with the PowerMCP PowerIO server. Writes a
-    MATPOWER file to out_path (use a .m extension).
+    Reads MATPOWER .m, PSS/E .raw (v33), PowerWorld .aux, PowerModels JSON, or
+    egret JSON via powerio and writes a MATPOWER file to out_path (use a .m
+    extension). Pass out_path to run_power_flow to run the simulation. powerio
+    is a core dependency, so this is always available.
 
     Args:
         file_path: Path to the source case file
         out_path: Destination for the MATPOWER case file (.m)
         source_format: Input format name (matpower, powermodels-json, egret-json,
             psse, powerworld); inferred from the file extension when omitted
+        operating_point: Optional package operating-point index to materialize
+        study_commit: Optional package study-commit index to materialize
 
     Returns:
         Dict with status, case_file path, component counts, and fidelity warnings
@@ -471,8 +482,13 @@ def load_network_from_any(
     except PathNotAllowed as exc:
         return {"status": "error", "message": str(exc)}
     try:
-        loaded = load_balanced_path(file_path, source_format)
-        case = loaded.network
+        prepared = prepare_balanced_file(
+            file_path,
+            source_format,
+            operating_point=operating_point,
+            study_commit=study_commit,
+        )
+        case = prepared.network
         conv = case.to_format("matpower")
         abs_out = os.path.abspath(out_path)
         with open(abs_out, "w") as fh:
@@ -490,8 +506,8 @@ def load_network_from_any(
             "branches": case.n_branches,
             "generators": case.n_gens,
         },
-        "warnings": list(loaded.warnings) + list(conv.warnings),
-        **({"package": loaded.package} if loaded.package is not None else {}),
+        "warnings": list(prepared.warnings) + list(conv.warnings),
+        **({"package": prepared.package} if prepared.package is not None else {}),
     }
 
 

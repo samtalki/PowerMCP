@@ -63,7 +63,7 @@ def _payload(result):
     return json.loads(result.content[0].text)
 
 
-def test_launch_serves_canonical_and_package_workflow_tools():
+def test_launch_serves_the_canonical_tool_surface():
     async def steps(session):
         return sorted(t.name for t in (await session.list_tools()).tools)
 
@@ -71,12 +71,8 @@ def test_launch_serves_canonical_and_package_workflow_tools():
         "convert",
         "diagnostics",
         "display",
-        "inspect_package",
-        "lower_package",
-        "materialize_package",
         "matrix",
         "normalize",
-        "package_case",
         "parse",
         "save",
         "summary",
@@ -145,20 +141,3 @@ def test_the_package_transport_reaches_summary_over_the_transport():
         )
 
     assert _run(steps)["elements"]["buses"] == 9
-
-
-def test_package_workflow_runs_over_the_transport():
-    async def steps(session):
-        packaged = _payload(
-            await session.call_tool("package_case", {"path": str(CASE9)})
-        )
-        return _payload(
-            await session.call_tool(
-                "inspect_package", {"package_json": packaged["package_json"]}
-            )
-        )
-
-    inspection = _run(steps)
-    assert inspection["schema"] == "powermcp.package-inspection"
-    assert inspection["model_kind"] == "balanced"
-    assert inspection["source_maps"]["entries"] > 0

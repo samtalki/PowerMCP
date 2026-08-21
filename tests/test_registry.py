@@ -39,8 +39,8 @@ def test_run_kind_consistency():
             assert t.entry_rel and not t.module
         else:
             assert t.module and not t.entry_rel
-        # "package" means the server is an importable module rather than a
-        # script copied into the wheel's bundled-server directory.
+        # "package" means the server ships in its own distribution, so this
+        # repo bundles no directory for it.
         assert (t.server_dir is None) == (t.run_kind == "package")
 
 
@@ -80,8 +80,8 @@ def test_packaged_tools_are_importable():
     for t in TOOLS.values():
         if t.run_kind != "package":
             continue
-        # No server-directory resolution to do: the module is importable and
-        # the doctor's probe already reports whether its dependency is present.
+        # No path resolution to do: pip put the module where it goes, and the
+        # doctor's probe already reports whether it is installed.
         assert importlib.util.find_spec(t.module.split(".")[0]) is not None
 
 
