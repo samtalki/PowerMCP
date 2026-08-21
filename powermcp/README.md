@@ -19,7 +19,8 @@ pip install powermcp
 ```
 
 The base install includes **pandapower**, **PyPSA**, and the **PowerIO** conversion
-server. Everything else is opt-in via an extra:
+server with PowerMCP's `.pio.json` package workflow tools. Everything else is
+opt-in via an extra:
 
 ```bash
 pip install "powermcp[psse]"            # one tool

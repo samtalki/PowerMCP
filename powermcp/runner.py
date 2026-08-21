@@ -11,9 +11,8 @@ registry):
   ``from core.server import ...``) resolve exactly as in standalone use.
 - ``module``: put the module root on ``sys.path`` and ``runpy.run_module`` the
   package's ``__main__`` (PSCAD's ``pscad_mcp.main``, HOPE's ``hope_mcp_server``).
-- ``package``: ``runpy.run_module`` a server that ships in its own distribution
-  and is already importable (powerio's ``powerio.mcp``). Nothing goes on
-  ``sys.path`` and this repo bundles no copy of that server.
+- ``package``: ``runpy.run_module`` an already importable server module
+  (PowerMCP's small extension of ``powerio.mcp``). Nothing goes on ``sys.path``.
 """
 
 from __future__ import annotations

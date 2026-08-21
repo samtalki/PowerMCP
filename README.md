@@ -126,7 +126,7 @@ These tools wrap commercial or locally-installed software, so PowerMCP stores th
 
 ### Case compilation between servers (PowerIO)
 
-PowerMCP runs the MCP server that [powerio](https://github.com/eigenergy/powerio) ships in its own wheel, as a **core dependency** (no extra needed) — `powermcp run powerio` is `python -m powerio.mcp`, so a powerio release that adds or renames a tool needs no change here. It parses transmission and distribution formats into canonical JSON transports, converts between target artifacts with fidelity warnings, and builds the sparse matrices solvers need (B', B'', Y_bus, PTDF, LODF, Laplacian, LACPF).
+PowerMCP extends the MCP server that [powerio](https://github.com/eigenergy/powerio) ships in its own wheel. PowerIO remains a core dependency and owns parsing, conversion, diagnostics, and matrix construction. PowerMCP adds four `.pio.json` workflow tools without copying PowerIO's implementations: `package_case`, `inspect_package`, `materialize_package`, and `lower_package`.
 
 Its JSON transport is the exchange format between PowerMCP servers: parse a case once, pass the returned `json` string between tool calls, and save runtime artifacts only when a backend needs a file. Existing `json` transport workflows remain supported.
 
@@ -139,16 +139,27 @@ matrix(kind="ptdf", json=...)                      # powerio server builds matri
 save(to_format="psse", out_path="case9.raw", json=...)  # stage a file for path only servers
 ```
 
-PowerIO also supports the `.pio.json` package transport, which carries the model plus package metadata and structured diagnostics:
+Use `.pio.json` for a durable case handoff. It carries the typed model along with provenance, field-level source maps, structured diagnostics, validation, stable element identities, lowering history, and optional operating points or study commits:
 
 ```
-parsed = parse(path="case9.raw", transport="package")
-pkg = parsed["package_json"]
-summary(package_json=pkg)
-matrix(kind="ptdf", package_json=pkg)
-save(to_format="psse", out_path="case9.raw", package_json=pkg)
-diagnostics(package_json=pkg)  # package diagnostics summary and structured findings
+packaged = package_case(path="case9.raw", out_path="case9.pio.json")
+inspect_package(package_json=packaged["package_json"])
+matrix(kind="ptdf", package_json=packaged["package_json"])
 ```
+
+A static balanced package can be passed directly to `load_network_from_json`, `load_model_from_json`, or `import_case_from_json` in the pandapower, Egret, ANDES, and PyPSA servers. Each bridge returns the package validation and provenance summary with its native model information.
+
+Packages with several states require an explicit selection before a solve. This keeps the base payload from being mistaken for the requested interval or study state:
+
+```
+state = materialize_package(package_json=..., operating_point=17)
+load_network_from_json(network_json=state["json"])
+
+study = materialize_package(package_json=..., study_commit=3)
+load_model_from_json(network_json=study["json"])
+```
+
+`lower_package` performs the explicit multiconductor-to-balanced lowering, returning PowerIO's preflight report and a package whose lowering history records the assumptions and losses. Distribution packages can also stay multiconductor and flow through `save(..., to_format="dss")` into OpenDSS.
 
 `summary` returns the canonical nested shape used by PowerIO and PowerMCP: counts live under `elements` (`elements.buses`, `elements.branches`, `elements.generators`) and topology metadata lives under `topology` (`topology.connected_components`, `topology.reference_buses`).
 
@@ -170,7 +181,7 @@ Every bundled server is still a standalone script. Clone the repo and run any se
 ```bash
 python pandapower/panda_mcp.py
 python PSSE/psse_mcp.py          # uses ~/.powermcp/config.toml if present, else legacy default paths
-python -m powerio.mcp            # powerio ships its own server; the clone holds no copy
+python -m powermcp run powerio   # canonical PowerIO tools plus package workflows
 ```
 
 ### Testing with your LLMs

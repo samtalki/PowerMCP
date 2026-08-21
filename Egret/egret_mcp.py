@@ -10,6 +10,7 @@ import io
 import logging
 from contextlib import redirect_stdout, redirect_stderr
 import numpy as np
+from powermcp.powerio_bridge import load_balanced_json, load_balanced_path
 from powermcp.sandbox import PathNotAllowed, checked_path
 
 # Configure logging to be less verbose
@@ -199,12 +200,8 @@ def solve_dc_opf(
 # powerio converts MATPOWER .m, PSS/E .raw (v33), PowerWorld .aux, PowerModels
 # JSON, or its own JSON transport to egret JSON; the staged file feeds the
 # solver tools above, which only accept case_file paths. powerio is a core
-# PowerMCP dependency. The import error response also keeps this
-# standalone script actionable.
+# PowerMCP dependency.
 # ---------------------------------------------------------------------------
-
-_POWERIO_HINT = "powerio not installed: pip install 'powerio[mcp,matrix]'"
-
 
 def _ensure_egret_runs_dir() -> str:
     from pathlib import Path
@@ -255,11 +252,12 @@ def _stage_egret_model(egret_json_text: str):
 
 @mcp.tool()
 def load_model_from_any(file_path: str, source_format: Optional[str] = None) -> Dict[str, Any]:
-    """Convert any powerio readable case file into an egret model.
+    """Convert any balanced PowerIO case into an egret model.
 
-    Reads MATPOWER .m, PSS/E .raw (v33), PowerWorld .aux, PowerModels JSON, or
-    egret JSON via powerio, converts it to egret JSON, validates it as an
-    egret ModelData, and stages it to a temp file. Pass the returned
+    Accepts every balanced format PowerIO supports, including a static
+    ``.pio.json`` package. A package carrying operating points or study commits
+    must first be materialized with the PowerMCP PowerIO server. The model is
+    converted to egret JSON, validated as ModelData, and staged. Pass the returned
     `case_file` path to solve_ac_opf, solve_dc_opf, or
     solve_unit_commitment_problem. powerio is a core dependency, so this is
     always available.
@@ -279,11 +277,8 @@ def load_model_from_any(file_path: str, source_format: Optional[str] = None) -> 
     except PathNotAllowed as exc:
         return {"status": "error", "message": str(exc)}
     try:
-        import powerio
-    except ImportError:
-        return {"status": "error", "message": _POWERIO_HINT}
-    try:
-        conv = powerio.convert_file(file_path, "egret-json", source_format)
+        loaded = load_balanced_path(file_path, source_format)
+        conv = loaded.network.to_format("egret-json")
         path, info = _stage_egret_model(conv.text)
     except FileNotFoundError:
         return {"status": "error", "message": f"File not found: {file_path}"}
@@ -293,13 +288,14 @@ def load_model_from_any(file_path: str, source_format: Optional[str] = None) -> 
         "status": "success",
         "case_file": path,
         "model_info": info,
-        "warnings": list(conv.warnings),
+        "warnings": list(loaded.warnings) + list(conv.warnings),
+        **({"package": loaded.package} if loaded.package is not None else {}),
     }
 
 
 @mcp.tool()
 def load_model_from_json(network_json: str) -> Dict[str, Any]:
-    """Convert a powerio JSON transport string into an egret model.
+    """Convert PowerIO model JSON or a static package into an egret model.
 
     Accepts the `json` string returned by the powerio server's parse tool,
     so a case parsed once there feeds egret without re-reading the file.
@@ -316,12 +312,8 @@ def load_model_from_json(network_json: str) -> Dict[str, Any]:
         and powerio's fidelity warnings
     """
     try:
-        import powerio
-    except ImportError:
-        return {"status": "error", "message": _POWERIO_HINT}
-    try:
-        case = powerio.from_json(network_json)
-        conv = case.to_format("egret-json")
+        loaded = load_balanced_json(network_json)
+        conv = loaded.network.to_format("egret-json")
         path, info = _stage_egret_model(conv.text)
     except Exception as e:
         return {"status": "error", "message": str(e)}
@@ -329,7 +321,8 @@ def load_model_from_json(network_json: str) -> Dict[str, Any]:
         "status": "success",
         "case_file": path,
         "model_info": info,
-        "warnings": list(conv.warnings),
+        "warnings": list(loaded.warnings) + list(conv.warnings),
+        **({"package": loaded.package} if loaded.package is not None else {}),
     }
 
 

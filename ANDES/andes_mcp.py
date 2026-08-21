@@ -9,6 +9,7 @@ from pathlib import Path
 from contextlib import redirect_stdout, redirect_stderr
 from mcp.server.mcpserver import MCPServer as FastMCP
 from typing import Dict, Any, Optional
+from powermcp.powerio_bridge import load_balanced_json, load_balanced_path
 from powermcp.sandbox import PathNotAllowed, checked_path, checked_read_tree
 
 # Storage directory resolved lazily (no filesystem writes at import time)
@@ -389,19 +390,15 @@ def get_system_info() -> Dict[str, Any]:
 # powerio bridge: load any powerio readable case into ANDES.
 # powerio parses MATPOWER .m, PSS/E .raw (v33), PowerWorld .aux, PowerModels
 # JSON, and egret JSON; the case is staged as a MATPOWER file that ANDES loads
-# natively via run_power_flow. powerio is a core PowerMCP dependency; the
-# import error response also keeps this standalone script actionable.
+# natively via run_power_flow. powerio is a core PowerMCP dependency.
 # ---------------------------------------------------------------------------
-
-_POWERIO_HINT = "powerio not installed: pip install 'powerio[mcp,matrix]'"
-
 
 @mcp.tool()
 def load_network_from_json(
     network_json: str,
     out_path: str,
 ) -> Dict[str, Any]:
-    """Stage a powerio JSON transport string as a MATPOWER file for ANDES.
+    """Stage PowerIO model JSON or a static package as MATPOWER for ANDES.
 
     Accepts the ``json`` string returned by the powerio server's parse tool.
     Converts the network to MATPOWER format, writes it to out_path (use a .m
@@ -421,11 +418,8 @@ def load_network_from_json(
     except PathNotAllowed as exc:
         return {"status": "error", "message": str(exc)}
     try:
-        import powerio
-    except ImportError:
-        return {"status": "error", "message": _POWERIO_HINT}
-    try:
-        case = powerio.from_json(network_json)
+        loaded = load_balanced_json(network_json)
+        case = loaded.network
         conv = case.to_format("matpower")
         abs_out = os.path.abspath(out_path)
         with open(abs_out, "w") as fh:
@@ -441,7 +435,8 @@ def load_network_from_json(
             "branches": case.n_branches,
             "generators": case.n_gens,
         },
-        "warnings": list(conv.warnings),
+        "warnings": list(loaded.warnings) + list(conv.warnings),
+        **({"package": loaded.package} if loaded.package is not None else {}),
     }
 
 
@@ -451,12 +446,12 @@ def load_network_from_any(
     out_path: str,
     source_format: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Stage any powerio readable case as a MATPOWER file for ANDES.
+    """Stage any balanced PowerIO case as a MATPOWER file for ANDES.
 
-    Reads MATPOWER .m, PSS/E .raw (v33), PowerWorld .aux, PowerModels JSON, or
-    egret JSON via powerio and writes a MATPOWER file to out_path (use a .m
-    extension). Pass out_path to run_power_flow to run the simulation. powerio
-    is a core dependency, so this is always available.
+    Accepts every balanced format PowerIO supports, including a static
+    ``.pio.json`` package. A package carrying operating points or study commits
+    must first be materialized with the PowerMCP PowerIO server. Writes a
+    MATPOWER file to out_path (use a .m extension).
 
     Args:
         file_path: Path to the source case file
@@ -476,11 +471,8 @@ def load_network_from_any(
     except PathNotAllowed as exc:
         return {"status": "error", "message": str(exc)}
     try:
-        import powerio
-    except ImportError:
-        return {"status": "error", "message": _POWERIO_HINT}
-    try:
-        case = powerio.parse_file(file_path, source_format)
+        loaded = load_balanced_path(file_path, source_format)
+        case = loaded.network
         conv = case.to_format("matpower")
         abs_out = os.path.abspath(out_path)
         with open(abs_out, "w") as fh:
@@ -498,7 +490,8 @@ def load_network_from_any(
             "branches": case.n_branches,
             "generators": case.n_gens,
         },
-        "warnings": list(conv.warnings),
+        "warnings": list(loaded.warnings) + list(conv.warnings),
+        **({"package": loaded.package} if loaded.package is not None else {}),
     }
 
 
