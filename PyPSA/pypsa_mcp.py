@@ -6,7 +6,12 @@ from pypsa import Network
 import numpy as np
 import pandas as pd
 from typing import Dict, List, Optional, Union, Any
-from powermcp.sandbox import PathNotAllowed, checked_path
+from powermcp.sandbox import (
+    PathNotAllowed,
+    checked_path,
+    checked_read_tree,
+    staged_directory_write,
+)
 
 
 def _to_serializable(obj: Any) -> Any:
@@ -35,6 +40,7 @@ mcp = FastMCP("PyPSA-MCP")
 @mcp.tool()
 def get_network_info(network_name: str) -> Dict[str, Any]:
     """Get basic information about the network"""
+    network_name = checked_path(network_name, purpose="network_name")
     network = Network(network_name)
     info = {
         "buses": len(network.buses),
@@ -80,6 +86,7 @@ def load_network(file_path: str) -> Dict[str, Any]:
 def run_power_flow(network_name: str, linear: bool = False) -> Dict[str, Any]:
     """Run a non-linear (AC) or linear (DC) power flow on the network"""
     try:
+        network_name = checked_path(network_name, purpose="network_name")
         network = Network(network_name)
         
         if linear:
@@ -133,6 +140,7 @@ def run_contingency_analysis(
     """
     try:
         # --- Base case ---
+        network_name = checked_path(network_name, purpose="network_name")
         network = Network(network_name)
         network.pf(use_seed=True)
 
@@ -263,6 +271,7 @@ def get_component_details(
     component_id: Optional[str] = None
 ) -> Dict[str, Any]:
     """Get detailed information about a specific component or all components of a type"""
+    network_name = checked_path(network_name, purpose="network_name")
     network = Network(network_name)
     
     if not hasattr(network, component_type):
@@ -297,10 +306,14 @@ def create_network(
     if snapshots:
         snapshots = pd.DatetimeIndex(snapshots)
     network = Network(name=name, snapshots=snapshots, crs=crs)
-    network.export_to_netcdf(f"{name}.nc")
+    output_path = checked_path(
+        f"{name}.nc", purpose="generated network path", for_write=True
+    )
+    network.export_to_netcdf(output_path)
     return {
         "status": "success",
-        "message": f"Network '{name}' created and saved to {name}.nc"
+        "message": f"Network '{name}' created and saved to {output_path}",
+        "network_file": output_path,
     }
 
 @mcp.tool()
@@ -313,6 +326,7 @@ def add_bus(
     carrier: str = "AC"
 ) -> Dict[str, Any]:
     """Add a bus to the network"""
+    network_name = checked_path(network_name, purpose="network_name")
     network = Network(network_name)
     network.add("Bus", bus_id, v_nom=v_nom, x=x, y=y, carrier=carrier)
     network.export_to_netcdf(network_name)
@@ -333,6 +347,7 @@ def add_generator(
     p_max_pu: float = 1.0
 ) -> Dict[str, Any]:
     """Add a generator to the network"""
+    network_name = checked_path(network_name, purpose="network_name")
     network = Network(network_name)
     network.add(
         "Generator",
@@ -358,6 +373,7 @@ def add_load(
     p_set: float
 ) -> Dict[str, Any]:
     """Add a load to the network"""
+    network_name = checked_path(network_name, purpose="network_name")
     network = Network(network_name)
     network.add("Load", load_id, bus=bus, p_set=p_set)
     network.export_to_netcdf(network_name)
@@ -378,6 +394,7 @@ def add_line(
     length: float = 1.0
 ) -> Dict[str, Any]:
     """Add a transmission line to the network"""
+    network_name = checked_path(network_name, purpose="network_name")
     network = Network(network_name)
     network.add(
         "Line",
@@ -407,6 +424,7 @@ def add_storage_unit(
     cyclic_state_of_charge: bool = True
 ) -> Dict[str, Any]:
     """Add a storage unit to the network"""
+    network_name = checked_path(network_name, purpose="network_name")
     network = Network(network_name)
     network.add(
         "StorageUnit",
@@ -435,6 +453,7 @@ def optimize_network(
     solver_options: Optional[Dict] = None
 ) -> Dict[str, Any]:
     """Run a linear optimal power flow (LOPF) on the network"""
+    network_name = checked_path(network_name, purpose="network_name")
     network = Network(network_name)
     
     try:
@@ -486,6 +505,7 @@ def optimize_investment(
     multi_investment_periods: bool = False
 ) -> Dict[str, Any]:
     """Run investment optimization to determine optimal capacity expansion"""
+    network_name = checked_path(network_name, purpose="network_name")
     network = Network(network_name)
     
     try:
@@ -538,13 +558,17 @@ def optimize_investment(
 def import_from_csv_folder(folder_path: str) -> Dict[str, Any]:
     """Import network from CSV files"""
     try:
-        folder_path = checked_path(folder_path, purpose="folder_path")
+        folder_path = checked_read_tree(folder_path, purpose="folder_path")
     except PathNotAllowed as exc:
         return {"status": "error", "message": str(exc)}
     try:
         network = Network()
         network.import_from_csv_folder(folder_path)
-        network_name = os.path.basename(folder_path) + ".nc"
+        network_name = checked_path(
+            os.path.basename(os.path.normpath(folder_path)) + ".nc",
+            purpose="generated network path",
+            for_write=True,
+        )
         network.export_to_netcdf(network_name)
         return {
             "status": "success",
@@ -564,8 +588,13 @@ def export_to_csv_folder(network_name: str, folder_path: str) -> Dict[str, Any]:
     except PathNotAllowed as exc:
         return {"status": "error", "message": str(exc)}
     try:
+        network_name = checked_path(network_name, purpose="network_name")
         network = Network(network_name)
-        network.export_to_csv_folder(folder_path)
+        staged_directory_write(
+            folder_path,
+            True,
+            lambda staging: network.export_to_csv_folder(staging),
+        )
         return {
             "status": "success",
             "message": f"Network exported to {folder_path}"
@@ -582,8 +611,8 @@ def export_to_csv_folder(network_name: str, folder_path: str) -> Dict[str, Any]:
 # powerio parses MATPOWER .m, PSS/E .raw (v33), PowerWorld .aux, PowerModels
 # JSON, and egret JSON; the case becomes a PYPOWER ppc dict, pypsa imports it,
 # and the network is saved to a .nc file whose path the other tools accept as
-# network_name. powerio is an optional extra, so the tools degrade to a status
-# dict when it is missing.
+# network_name. powerio is a core PowerMCP dependency. The import error response
+# also keeps this standalone script actionable.
 # ---------------------------------------------------------------------------
 
 _POWERIO_HINT = "powerio not installed: pip install 'powerio[mcp,matrix]'"

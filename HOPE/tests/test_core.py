@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -23,7 +25,8 @@ from hope_mcp_server.core import (
     julia_string_literal,
     setup_command,
 )
-from hope_mcp_server.server import create_mcp_server
+from hope_mcp_server.server import configured_transport_security, create_mcp_server
+from hope_mcp_server import chatgpt
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -34,10 +37,39 @@ JULIA_BIN = (
 
 class HopeCoreTests(unittest.TestCase):
     def setUp(self) -> None:
+        self.fixture_dir = tempfile.TemporaryDirectory()
+        self.repo_root = Path(self.fixture_dir.name)
+        modelcases = self.repo_root / "ModelCases"
+        canonical = modelcases / "MD_GTEP_clean_case"
+        alternate = modelcases / "USA_64zone_GTEP_case"
+        for case in (canonical, alternate):
+            (case / "Settings").mkdir(parents=True)
+            (case / "Settings" / "HOPE_model_settings.yml").write_text(
+                "model_mode: GTEP\n"
+                "solver: highs\n"
+                "DataCase: Data_100RPS/\n",
+                encoding="utf-8",
+            )
+            (case / "Data_100RPS").mkdir()
+
+        output = canonical / "output"
+        output.mkdir()
+        (output / "system_cost.csv").write_text(
+            "Zone,Inv_cost ($),Opr_cost ($),LoL_plt ($),Total_cost ($)\n"
+            "MD,1,2,0,3\n",
+            encoding="utf-8",
+        )
+        (output / "capacity.csv").write_text(
+            "Technology,Zone,EC_Category,New_Build,Capacity_INI (MW),"
+            "Capacity_RET (MW),Capacity_FIN (MW)\n"
+            "SolarPV,MD,Candidate,1,0,0,100\n",
+            encoding="utf-8",
+        )
+
         self.env_patch = mock.patch.dict(
             "os.environ",
             {
-                "HOPE_REPO_ROOT": str(REPO_ROOT),
+                "HOPE_REPO_ROOT": str(self.repo_root),
                 "HOPE_JULIA_BIN": JULIA_BIN,
             },
             clear=False,
@@ -46,6 +78,7 @@ class HopeCoreTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.env_patch.stop()
+        self.fixture_dir.cleanup()
 
     def test_case_info_reads_yaml_and_output_inventory(self) -> None:
         result = hope_case_info()
@@ -92,8 +125,8 @@ class HopeCoreTests(unittest.TestCase):
         self.assertEqual(result["solver"], canonical["solver"])
 
     def test_read_only_server_exposes_only_fetch_tools(self) -> None:
-        mcp = create_mcp_server(read_only=True, host="127.0.0.1", port=8765)
-        tool_names = {tool.name for tool in mcp._tool_manager.list_tools()}
+        mcp = create_mcp_server(read_only=True)
+        tool_names = {tool.name for tool in asyncio.run(mcp.list_tools())}
         self.assertIn("hope_case_info", tool_names)
         self.assertIn("hope_read_output", tool_names)
         self.assertNotIn("hope_run_hope", tool_names)
@@ -104,8 +137,8 @@ class HopeCoreTests(unittest.TestCase):
         self.assertNotIn("hope_debug_solver_environment_async", tool_names)
 
     def test_full_server_keeps_run_tools_for_claude(self) -> None:
-        mcp = create_mcp_server(read_only=False, host="127.0.0.1", port=8766)
-        tool_names = {tool.name for tool in mcp._tool_manager.list_tools()}
+        mcp = create_mcp_server(read_only=False)
+        tool_names = {tool.name for tool in asyncio.run(mcp.list_tools())}
         self.assertIn("hope_run_hope", tool_names)
         self.assertIn("hope_update_settings", tool_names)
         self.assertIn("hope_job_status", tool_names)
@@ -119,11 +152,36 @@ class HopeCoreTests(unittest.TestCase):
             {"HOPE_MCP_PUBLIC_HOSTNAME": "hope.hope-mcp.com"},
             clear=False,
         ):
-            mcp = create_mcp_server(read_only=True, host="127.0.0.1", port=8767)
-        settings = mcp.settings.transport_security
+            settings = configured_transport_security(
+                read_only=True,
+                host="127.0.0.1",
+            )
         self.assertIsNotNone(settings)
         self.assertIn("hope.hope-mcp.com", settings.allowed_hosts)
         self.assertIn("https://hope.hope-mcp.com", settings.allowed_origins)
+
+    def test_chatgpt_entrypoint_passes_transport_settings_to_run(self) -> None:
+        server = mock.Mock()
+        with (
+            mock.patch.object(chatgpt, "create_mcp_server", return_value=server),
+            mock.patch.dict(
+                "os.environ",
+                {
+                    "HOPE_MCP_HOST": "127.0.0.1",
+                    "HOPE_MCP_PORT": "8765",
+                    "HOPE_MCP_PUBLIC_HOSTNAME": "hope.example.com",
+                },
+                clear=False,
+            ),
+        ):
+            chatgpt.main()
+
+        server.run.assert_called_once()
+        args, kwargs = server.run.call_args
+        self.assertEqual(args, ("streamable-http",))
+        self.assertEqual(kwargs["host"], "127.0.0.1")
+        self.assertEqual(kwargs["port"], 8765)
+        self.assertIsNotNone(kwargs["transport_security"])
 
     def test_build_run_command_uses_env_config(self) -> None:
         case_path = REPO_ROOT / "ModelCases" / "MD_GTEP_clean_case"
@@ -143,7 +201,7 @@ class HopeCoreTests(unittest.TestCase):
         with mock.patch.dict(
             "os.environ",
             {
-                "HOPE_REPO_ROOT": str(REPO_ROOT),
+                "HOPE_REPO_ROOT": str(self.repo_root),
                 "HOPE_JULIA_BIN": str(PACKAGE_ROOT / "missing-julia"),
             },
             clear=False,
@@ -174,7 +232,7 @@ class HopeCoreTests(unittest.TestCase):
         self.assertEqual(result["error_type"], "hope_environment_not_instantiated")
         self.assertEqual(
             result["setup_command"],
-            setup_command(REPO_ROOT, JULIA_BIN),
+            setup_command(self.repo_root, JULIA_BIN),
         )
 
     def test_cancel_job_returns_not_found_for_unknown_id(self) -> None:

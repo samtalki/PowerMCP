@@ -7,7 +7,7 @@ This script provides a set of tools accessible via the Model-Context Protocol (M
 to automate LTSpice simulations. It allows an AI assistant to create netlists,
 run simulations, and plot results programmatically.
 
-This server is built using `fastmcp` and is intended to be run from within
+This server uses the MCP Python SDK 2 server surface and is intended to run within
 an AI-powered editor like Cursor.
 
 Features:
@@ -33,9 +33,9 @@ import subprocess
 from pathlib import Path
 
 # --- Third-Party Imports ---
-# `fastmcp` is for creating the MCP server.
+# The MCP Python SDK provides the server implementation.
 try:
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server.mcpserver import MCPServer as FastMCP
 except ImportError:
     sys.exit("Error: mcp library not found. Please run 'pip install mcp'.")
 
@@ -51,12 +51,14 @@ try:
 except ImportError:
     sys.exit("Error: PyLTSpice/spicelib not found. Please run 'pip install PyLTSpice'.")
 
+from powermcp.sandbox import PathNotAllowed, checked_path
+
 
 # =============================================================================
 #  1. Server & Logging Configuration
 # =============================================================================
 
-# Initialize the FastMCP server instance. This object will manage all our tools.
+# Initialize the MCP server instance. This object manages all registered tools.
 mcp = FastMCP()
 
 # Configure logging to provide timestamps and clear status messages in the console.
@@ -111,12 +113,27 @@ def _output_dir():
     """
     try:
         from powermcp.paths import runs_dir
-        return str(runs_dir("ltspice"))
+        return str(runs_dir("ltspice", create=False))
     except Exception:
         import os
-        d = os.path.join(os.path.expanduser("~"), ".powermcp", "runs", "ltspice")
-        os.makedirs(d, exist_ok=True)
-        return d
+        return os.path.join(os.path.expanduser("~"), ".powermcp", "runs", "ltspice")
+
+
+def _ensure_output_dir() -> str:
+    """Create the generated run root only after checking each new component."""
+    output = Path(_output_dir())
+    missing = []
+    current = output
+    while not current.exists():
+        missing.append(current)
+        current = current.parent
+    checked_path(str(current), purpose="generated output root")
+    for path in reversed(missing):
+        path_text = checked_path(
+            str(path), purpose="generated output root", for_write=True
+        )
+        Path(path_text).mkdir()
+    return checked_path(str(output), purpose="generated output root", for_write=True)
 
 
 def check_ltspice_executable():
@@ -149,10 +166,18 @@ async def create_simulation_session(netlist_text: str) -> dict:
     """
     try:
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        session_dir = os.path.join(_output_dir(), timestamp)
+        session_dir = checked_path(
+            os.path.join(_ensure_output_dir(), timestamp),
+            purpose="generated session directory",
+            for_write=True,
+        )
         os.makedirs(session_dir, exist_ok=True)
 
-        netlist_path = os.path.join(session_dir, "circuit.net")
+        netlist_path = checked_path(
+            os.path.join(session_dir, "circuit.net"),
+            purpose="generated netlist path",
+            for_write=True,
+        )
         with open(netlist_path, "w") as f:
             f.write(netlist_text)
 
@@ -177,6 +202,14 @@ async def run_simulation(netlist_path: str, session_dir: str) -> dict:
     Runs the LTSpice simulation in batch mode (-b flag) using a .net file.
     The output .raw and .log files are saved in the specified session directory.
     """
+    try:
+        netlist_path = checked_path(netlist_path, purpose="netlist_path")
+        session_dir = checked_path(
+            session_dir, purpose="session_dir", for_write=True
+        )
+    except PathNotAllowed as exc:
+        return {"status": "error", "message": str(exc)}
+
     is_valid, message = check_ltspice_executable()
     if not is_valid:
         return {"status": "error", "message": message}
@@ -192,12 +225,19 @@ async def run_simulation(netlist_path: str, session_dir: str) -> dict:
         else:
             cmd = [WINE_COMMAND, ltspice_exe, "-b", netlist_filename]
 
+        log_file_path = checked_path(
+            os.path.join(session_dir, "circuit.log"),
+            purpose="generated log path",
+            for_write=True,
+        )
+        raw_file_path = checked_path(
+            os.path.join(session_dir, "circuit.raw"),
+            purpose="generated raw path",
+            for_write=True,
+        )
         process = subprocess.run(
             cmd, cwd=session_dir, capture_output=True, text=True, check=False
         )
-
-        log_file_path = os.path.join(session_dir, "circuit.log")
-        raw_file_path = os.path.join(session_dir, "circuit.raw")
 
         if process.returncode != 0 or not os.path.exists(raw_file_path):
             log_content = "Log file not found."
@@ -234,6 +274,10 @@ async def list_available_traces(raw_file_path: str) -> dict:
     Reads the .raw output file and lists all available signals (traces)
     that can be plotted, such as 'V(node)' or 'I(R1)'.
     """
+    try:
+        raw_file_path = checked_path(raw_file_path, purpose="raw_file_path")
+    except PathNotAllowed as exc:
+        return {"status": "error", "message": str(exc)}
     if not os.path.exists(raw_file_path):
         return {"status": "error", "message": f"RAW file not found: '{raw_file_path}'"}
     try:
@@ -250,6 +294,13 @@ async def plot_specific_traces(raw_file_path: str, session_dir: str, trace_names
     """
     Generates and saves a .png plot of the specified traces from a .raw file.
     """
+    try:
+        raw_file_path = checked_path(raw_file_path, purpose="raw_file_path")
+        session_dir = checked_path(
+            session_dir, purpose="session_dir", for_write=True
+        )
+    except PathNotAllowed as exc:
+        return {"status": "error", "message": str(exc)}
     if not os.path.exists(raw_file_path):
         return {"status": "error", "message": f"RAW file not found: '{raw_file_path}'"}
 
@@ -286,7 +337,11 @@ async def plot_specific_traces(raw_file_path: str, session_dir: str, trace_names
         # Generate a safe and descriptive filename.
         safe_traces = ''.join(c for c in '_'.join(trace_names) if c.isalnum() or c in ('_', '-'))
         plot_filename = f"plot_{safe_traces}.png"
-        plot_path = os.path.join(session_dir, plot_filename)
+        plot_path = checked_path(
+            os.path.join(session_dir, plot_filename),
+            purpose="generated plot path",
+            for_write=True,
+        )
         
         plt.savefig(plot_path)
         plt.close()
@@ -302,6 +357,10 @@ async def plot_specific_traces(raw_file_path: str, session_dir: str, trace_names
 @mcp.tool()
 async def read_simulation_log(log_file_path: str) -> dict:
     """Reads the content of a simulation .log file, useful for debugging."""
+    try:
+        log_file_path = checked_path(log_file_path, purpose="log_file_path")
+    except PathNotAllowed as exc:
+        return {"status": "error", "message": str(exc)}
     if not os.path.exists(log_file_path):
         return {"status": "error", "message": f"Log file not found: '{log_file_path}'"}
     try:
@@ -346,6 +405,11 @@ async def view_netlist_in_ltspice(netlist_path: str) -> dict:
     """
     [Helper Tool] Opens the specified .net file in the LTspice GUI.
     """
+    try:
+        netlist_path = checked_path(netlist_path, purpose="netlist_path")
+    except PathNotAllowed as exc:
+        return {"status": "error", "message": str(exc)}
+
     is_valid, message = check_ltspice_executable()
     if not is_valid:
         return {"status": "error", "message": message}

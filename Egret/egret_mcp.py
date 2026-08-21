@@ -198,11 +198,35 @@ def solve_dc_opf(
 # powerio bridge: ingest any powerio readable case into egret.
 # powerio converts MATPOWER .m, PSS/E .raw (v33), PowerWorld .aux, PowerModels
 # JSON, or its own JSON transport to egret JSON; the staged file feeds the
-# solver tools above, which only accept case_file paths. powerio is an
-# optional extra, so the tools degrade to a status dict when it is missing.
+# solver tools above, which only accept case_file paths. powerio is a core
+# PowerMCP dependency. The import error response also keeps this
+# standalone script actionable.
 # ---------------------------------------------------------------------------
 
 _POWERIO_HINT = "powerio not installed: pip install 'powerio[mcp,matrix]'"
+
+
+def _ensure_egret_runs_dir() -> str:
+    from pathlib import Path
+    from powermcp.paths import runs_dir
+
+    output = Path(runs_dir("egret", create=False))
+    missing = []
+    current = output
+    while not current.exists():
+        missing.append(current)
+        current = current.parent
+    checked_path(str(current), purpose="generated Egret output root")
+    for path in reversed(missing):
+        path = Path(
+            checked_path(
+                str(path), purpose="generated Egret output root", for_write=True
+            )
+        )
+        path.mkdir()
+    return checked_path(
+        str(output), purpose="generated Egret output root", for_write=True
+    )
 
 
 def _stage_egret_model(egret_json_text: str):
@@ -212,7 +236,17 @@ def _stage_egret_model(egret_json_text: str):
     import tempfile
 
     md = ModelData(json.loads(egret_json_text))
-    fd, path = tempfile.mkstemp(suffix=".json", prefix="egret_case_")
+    fd, path = tempfile.mkstemp(
+        suffix=".json", prefix="egret_case_", dir=_ensure_egret_runs_dir()
+    )
+    try:
+        path = checked_path(
+            path, purpose="generated Egret case path", for_write=True
+        )
+    except BaseException:
+        os.close(fd)
+        os.unlink(path)
+        raise
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         fh.write(egret_json_text)
     info = {name: len(items) for name, items in md.data.get("elements", {}).items()}

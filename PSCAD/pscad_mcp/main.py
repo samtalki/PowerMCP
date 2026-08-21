@@ -1,7 +1,7 @@
 import logging
 import sys
 import os
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer as FastMCP
 
 # Add the parent directory to sys.path to allow absolute imports when run as a script
 script_dir = os.path.dirname(os.path.abspath(__file__))

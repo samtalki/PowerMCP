@@ -312,6 +312,47 @@ def test_pypsa_import_missing_file(tmp_path):
     assert "not found" in r["message"].lower()
 
 
+def test_pypsa_network_name_is_confined(tmp_path, monkeypatch):
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    outside = tmp_path / "outside.nc"
+    monkeypatch.setenv("POWERIO_MCP_ALLOWED_ROOTS", str(allowed))
+
+    with pytest.raises(ValueError, match="outside allowed MCP roots"):
+        pypsa_mcp.get_network_info(str(outside))
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlink semantics")
+def test_pypsa_csv_import_preflights_the_complete_tree(tmp_path, monkeypatch):
+    allowed = tmp_path / "allowed"
+    dataset = allowed / "network"
+    outside = tmp_path / "outside.csv"
+    dataset.mkdir(parents=True)
+    outside.write_text("name\nsecret\n")
+    (dataset / "buses.csv").symlink_to(outside)
+    monkeypatch.setenv("POWERIO_MCP_ALLOWED_ROOTS", str(allowed))
+
+    result = pypsa_mcp.import_from_csv_folder(str(dataset))
+    assert result["status"] == "error"
+    assert "outside its allowed MCP root" in result["message"]
+
+
+def test_pypsa_csv_export_is_staged_and_preserves_unrelated_files(tmp_path):
+    network_file = tmp_path / "network.nc"
+    network = pypsa.Network()
+    network.add("Bus", "bus")
+    network.export_to_netcdf(network_file)
+
+    output = tmp_path / "csv"
+    output.mkdir()
+    (output / "keep.txt").write_text("keep")
+    result = pypsa_mcp.export_to_csv_folder(str(network_file), str(output))
+
+    assert result["status"] == "success", result
+    assert (output / "keep.txt").read_text() == "keep"
+    assert (output / "buses.csv").is_file()
+
+
 def test_registry_entry():
     t = TOOLS["powerio"]
     assert t.kind == "open-source"

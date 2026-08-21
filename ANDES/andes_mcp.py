@@ -9,18 +9,46 @@ from pathlib import Path
 from contextlib import redirect_stdout, redirect_stderr
 from mcp.server.mcpserver import MCPServer as FastMCP
 from typing import Dict, Any, Optional
-from powermcp.sandbox import PathNotAllowed, checked_path
+from powermcp.sandbox import PathNotAllowed, checked_path, checked_read_tree
 
 # Storage directory resolved lazily (no filesystem writes at import time)
 def _andes_runs_dir():
     try:
         from powermcp.paths import runs_dir
-        return str(runs_dir("andes"))
+        return str(runs_dir("andes", create=False))
     except Exception:
         import os
-        d = os.path.join(os.path.expanduser("~"), ".powermcp", "runs", "andes")
-        os.makedirs(d, exist_ok=True)
-        return d
+        return os.path.join(os.path.expanduser("~"), ".powermcp", "runs", "andes")
+
+
+def _ensure_andes_runs_dir() -> str:
+    output = Path(_andes_runs_dir())
+    missing = []
+    current = output
+    while not current.exists():
+        missing.append(current)
+        current = current.parent
+    checked_path(str(current), purpose="generated ANDES output root")
+    for path in reversed(missing):
+        path = Path(
+            checked_path(
+                str(path), purpose="generated ANDES output root", for_write=True
+            )
+        )
+        path.mkdir()
+    return checked_path(
+        str(output), purpose="generated ANDES output root", for_write=True
+    )
+
+
+def _prepare_run_dir(name: str, purpose: str) -> str:
+    run_dir = checked_path(
+        os.path.join(_ensure_andes_runs_dir(), name),
+        purpose=purpose,
+        for_write=True,
+    )
+    os.makedirs(run_dir, exist_ok=True)
+    return checked_read_tree(run_dir, purpose=purpose)
 
 # Configure logging (stream only at import; file handler attached lazily)
 logging.basicConfig(
@@ -46,7 +74,12 @@ def _ensure_file_logging():
     if _file_handler_added:
         return
     try:
-        fh = logging.FileHandler(os.path.join(_andes_runs_dir(), 'mcp_server.log'))
+        log_path = checked_path(
+            os.path.join(_ensure_andes_runs_dir(), 'mcp_server.log'),
+            purpose="generated ANDES log path",
+            for_write=True,
+        )
+        fh = logging.FileHandler(log_path)
         fh.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
         logging.getLogger().addHandler(fh)
     except Exception:
@@ -84,11 +117,17 @@ def run_power_flow(file_path: str) -> Dict[str, Any]:
             }
 
         # Create a unique directory for this run
-        run_dir = os.path.join(_andes_runs_dir(), f"pf_{Path(abs_file_path).stem}")
-        os.makedirs(run_dir, exist_ok=True)
+        run_dir = _prepare_run_dir(
+            f"pf_{Path(abs_file_path).stem}",
+            "generated power flow output directory",
+        )
         
         # Copy input file to run directory
-        input_file = os.path.join(run_dir, os.path.basename(abs_file_path))
+        input_file = checked_path(
+            os.path.join(run_dir, os.path.basename(abs_file_path)),
+            purpose="generated ANDES input copy",
+            for_write=True,
+        )
         shutil.copy2(abs_file_path, input_file)
         
         # Save current directory and change to run directory
@@ -163,8 +202,10 @@ def run_time_domain_simulation(step_size: float = 0.01, t_end: float = 10.0) -> 
         ss = system_state['current_system']
 
         # Create a unique directory for this run
-        run_dir = os.path.join(_andes_runs_dir(), f"tds_{int(t_end)}s")
-        os.makedirs(run_dir, exist_ok=True)
+        run_dir = _prepare_run_dir(
+            f"tds_{int(t_end)}s",
+            "generated time domain output directory",
+        )
         
         # Save current directory and change to run directory
         original_dir = os.getcwd()
@@ -245,8 +286,10 @@ def run_eigenvalue_analysis(file_path: str) -> Dict[str, Any]:
             }
 
         # Create a unique directory for this run
-        run_dir = os.path.join(_andes_runs_dir(), f"eig_{Path(abs_file_path).stem}")
-        os.makedirs(run_dir, exist_ok=True)
+        run_dir = _prepare_run_dir(
+            f"eig_{Path(abs_file_path).stem}",
+            "generated eigenvalue output directory",
+        )
         
         # Save current directory and change to run directory
         original_dir = os.getcwd()
@@ -346,8 +389,8 @@ def get_system_info() -> Dict[str, Any]:
 # powerio bridge: load any powerio readable case into ANDES.
 # powerio parses MATPOWER .m, PSS/E .raw (v33), PowerWorld .aux, PowerModels
 # JSON, and egret JSON; the case is staged as a MATPOWER file that ANDES loads
-# natively via run_power_flow. powerio is an optional extra, so the tools
-# degrade gracefully when it is missing.
+# natively via run_power_flow. powerio is a core PowerMCP dependency; the
+# import error response also keeps this standalone script actionable.
 # ---------------------------------------------------------------------------
 
 _POWERIO_HINT = "powerio not installed: pip install 'powerio[mcp,matrix]'"

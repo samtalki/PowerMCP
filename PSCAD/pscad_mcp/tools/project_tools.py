@@ -1,13 +1,17 @@
 from typing import List, Dict, Any, Optional
 import os
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer as FastMCP
 from pscad_mcp.core.connection_manager import pscad_manager
 from pscad_mcp.core.executor import robust_executor
+from powermcp.sandbox import checked_path
 
 async def load_projects(filenames: List[str]) -> str:
     """Load projects or workspace into PSCAD."""
     pscad = pscad_manager.pscad
-    abs_paths = [os.path.abspath(f) for f in filenames]
+    abs_paths = [
+        os.path.abspath(checked_path(filename, purpose="filenames"))
+        for filename in filenames
+    ]
     # Parsing a large .pscx (the MMC case is ~1.1 MB) can exceed the default
     # 30 s watchdog, so give loading a generous timeout.
     await robust_executor.run_safe(pscad.load, *abs_paths, _timeout=120)

@@ -3,9 +3,10 @@ import unittest
 from unittest.mock import MagicMock, patch
 import os
 from pscad_mcp.tools.project_tools import register_project_tools, run_project, load_projects, find_components
-from pscad_mcp.tools.app_tools import register_app_tools, get_pscad_status
+from pscad_mcp.tools.app_tools import register_app_tools, get_pscad_status, read_documentation
 from pscad_mcp.core.connection_manager import pscad_manager
-from mcp.server.fastmcp import FastMCP
+from pscad_mcp.utils.doc_manager import DocumentationManager
+from mcp.server.mcpserver import MCPServer as FastMCP
 
 class TestAllTools(unittest.IsolatedAsyncioTestCase):
     """
@@ -35,6 +36,15 @@ class TestAllTools(unittest.IsolatedAsyncioTestCase):
         self.mock_pscad.is_busy.side_effect = Exception("COM Error")
         result = await get_pscad_status()
         self.assertEqual(result["connected"], False)
+
+    async def test_documentation_name_is_not_a_path(self):
+        result = await read_documentation("/tmp/secret")
+        self.assertIn("dotted ASCII Python module name", result)
+
+    async def test_documentation_manager_does_not_write_at_import(self):
+        with self.subTest("constructor is read-only"):
+            manager = DocumentationManager("missing/docs")
+            self.assertFalse(os.path.exists(manager.base_dir))
 
     # --- Project Tools ---
 

@@ -51,8 +51,9 @@ def _stderr_print(*args, _p=_bt.print, **kwargs):
 _bt.print = _stderr_print
 del _bt
 
-# ── FastMCP ───────────────────────────────────────────────────────────────────
-from fastmcp import FastMCP
+# ── MCP server ────────────────────────────────────────────────────────────────
+from mcp.server.mcpserver import MCPServer as FastMCP
+from powermcp.sandbox import checked_path, checked_read_tree
 
 mcp = FastMCP(
     name="DIgSILENT PowerFactory Control",
@@ -65,6 +66,23 @@ mcp = FastMCP(
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
 
+def _ensure_checked_directory(path: str, purpose: str) -> str:
+    """Create a generated directory after checking each missing component."""
+    from pathlib import Path
+
+    target = Path(path).expanduser()
+    missing = []
+    current = target
+    while not current.exists():
+        missing.append(current)
+        current = current.parent
+    checked_path(str(current), purpose=purpose)
+    for item in reversed(missing):
+        item = Path(checked_path(str(item), purpose=purpose, for_write=True))
+        item.mkdir()
+    return checked_path(str(target), purpose=purpose, for_write=True)
+
+
 def _default_cfg_path():
     """Resolve the user-writable default config path (lazily, never at import).
 
@@ -74,16 +92,18 @@ def _default_cfg_path():
     yet exist (the packaged copy is read-only).
     """
     import os, shutil
+    p = None
     try:
         from powermcp.config import get_path
         p = get_path("powerfactory", "config_path", must_exist=False)
-        if p:
-            return p
     except Exception:
         pass
+    if p:
+        return checked_path(p, purpose="config path")
     base = os.path.join(os.path.expanduser("~"), ".powermcp", "powerfactory")
-    os.makedirs(base, exist_ok=True)
+    base = _ensure_checked_directory(base, "generated config directory")
     dest = os.path.join(base, "simulation_config.json")
+    dest = checked_path(dest, purpose="generated config path", for_write=True)
     example = os.path.join(os.path.dirname(os.path.abspath(__file__)), "simulation_config.example.json")
     if not os.path.exists(dest) and os.path.exists(example):
         shutil.copyfile(example, dest)
@@ -174,7 +194,7 @@ def close_digsilent() -> str:
 @mcp.tool()
 def get_config(cfg_path: str = "") -> str:
     """Return the active simulation_config.json as a JSON string."""
-    path = cfg_path or _default_cfg_path()
+    path = checked_path(cfg_path, purpose="cfg_path") if cfg_path else _default_cfg_path()
     with open(path, "r", encoding="utf-8") as fh:
         return json.dumps(json.load(fh), indent=2, ensure_ascii=False)
 
@@ -205,6 +225,7 @@ def import_project(
     """
     if not file_path:
         return json.dumps({"success": False, "message": "file_path is required"})
+    file_path = checked_path(file_path, purpose="file_path")
     _, DIgSILENTAgent = _load_modules()
     ok, msg = _pf(DIgSILENTAgent.import_project, file_path, open_digsilent)
     return json.dumps({"success": ok, "message": msg})
@@ -242,7 +263,7 @@ def create_study_case(
         JSON string with success flag and message.
     """
     SimulationConfig, DIgSILENTAgent = _load_modules()
-    path = cfg_path or _default_cfg_path()
+    path = checked_path(cfg_path, purpose="cfg_path") if cfg_path else _default_cfg_path()
     cfg = SimulationConfig.from_json(path)
     ok, msg = _pf(
         DIgSILENTAgent.create_study_case,
@@ -320,10 +341,13 @@ def run_loadflow(
     output_dir = r"C:\RMS_Results"
     run_label = "run_001"
     if save_csv:
-        path = cfg_path or _default_cfg_path()
+        path = checked_path(cfg_path, purpose="cfg_path") if cfg_path else _default_cfg_path()
         try:
             cfg = SimulationConfig.from_json(path)
             output_dir = getattr(cfg, "output_dir", output_dir) or output_dir
+            output_dir = checked_path(
+                output_dir, purpose="configured output directory", for_write=True
+            )
             run_label = getattr(cfg, "run_label", run_label) or run_label
         except Exception as e:
             return json.dumps(
@@ -388,8 +412,11 @@ def run_simulation(
         and per-step status.
     """
     SimulationConfig, DIgSILENTAgent = _load_modules()
-    path = cfg_path or _default_cfg_path()
+    path = checked_path(cfg_path, purpose="cfg_path") if cfg_path else _default_cfg_path()
     cfg = SimulationConfig.from_json(path)
+    cfg.output_dir = checked_path(
+        cfg.output_dir, purpose="configured output directory", for_write=True
+    )
     cfg.export_pfd = 1 if export_pfd else 0
     cfg.open_digsilent = 1 if open_digsilent else 0
 
@@ -462,8 +489,11 @@ def run_custom_case(
         JSON string with pipeline result (same schema as run_simulation).
     """
     SimulationConfig, DIgSILENTAgent = _load_modules()
-    path = cfg_path or _default_cfg_path()
+    path = checked_path(cfg_path, purpose="cfg_path") if cfg_path else _default_cfg_path()
     cfg = SimulationConfig.from_json(path)
+    cfg.output_dir = checked_path(
+        cfg.output_dir, purpose="configured output directory", for_write=True
+    )
     if create_new_study_case:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         cfg.study_case = f"{case_name}_{ts}"
@@ -524,11 +554,13 @@ def read_results_csv(csv_path: str = "", max_rows: int = 2000, as_path: bool = F
         with file path, total rows, and truncation flag.
     """
     if csv_path:
-        target = csv_path
+        target = checked_path(csv_path, purpose="csv_path")
     else:
-        with open(_default_cfg_path(), "r", encoding="utf-8") as fh:
+        config_path = _default_cfg_path()
+        with open(config_path, "r", encoding="utf-8") as fh:
             cfg_data = json.load(fh)
         base_dir = cfg_data.get("output_dir", _HERE)
+        base_dir = checked_read_tree(base_dir, purpose="results output tree")
 
         candidates = []
         for root, _, files in os.walk(base_dir):
@@ -541,6 +573,8 @@ def read_results_csv(csv_path: str = "", max_rows: int = 2000, as_path: bool = F
             return json.dumps({"error": f"No *_RMS.csv files found under {base_dir}"})
         candidates.sort(reverse=True)
         target = candidates[0][1]
+
+    target = checked_path(target, purpose="results CSV path")
 
     if not os.path.exists(target):
         return json.dumps({"error": f"File not found: {target}"})

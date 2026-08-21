@@ -2,7 +2,7 @@
 
 from typing import Any, Callable, Dict, Optional
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer as FastMCP
 from py_dss_toolkit import dss_tools
 
 from utils.responses import _err, _ok, _require_solution

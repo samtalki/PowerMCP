@@ -5,7 +5,10 @@ import logging
 import re
 import ast
 import importlib.util
+from pathlib import Path
 from typing import List, Dict, Any, Optional
+
+from powermcp.sandbox import checked_path
 
 logger = logging.getLogger("pscad-mcp.doc_manager")
 
@@ -102,21 +105,51 @@ class DocumentationManager:
 
     def __init__(self, docs_dir: str = None):
         if docs_dir is None:
-            # Default to a "docs" folder next to the main project root (PSCAD/docs)
-            current_file_dir = os.path.dirname(os.path.abspath(__file__))
-            project_root = os.path.dirname(os.path.dirname(current_file_dir))
-            docs_dir = os.path.join(project_root, "docs")
+            try:
+                from powermcp.paths import tool_data_dir
+
+                docs_dir = str(tool_data_dir("pscad", create=False) / "docs")
+            except Exception:
+                docs_dir = os.path.join(
+                    os.path.expanduser("~"), ".powermcp", "pscad", "docs"
+                )
             
         self.base_dir = os.path.abspath(docs_dir)
         self.md_dir = os.path.join(self.base_dir, "md")
         self.raw_dir = os.path.join(self.base_dir, "raw")
         
-        # Ensure directory structure exists
-        os.makedirs(self.md_dir, exist_ok=True)
-        os.makedirs(self.raw_dir, exist_ok=True)
+    @staticmethod
+    def _ensure_directory(path: str) -> str:
+        """Create a documentation output only after checking every component."""
+        target = Path(path).expanduser()
+        missing = []
+        current = target
+        while not current.exists():
+            missing.append(current)
+            current = current.parent
+        checked_path(str(current), purpose="generated PSCAD documentation root")
+        for item in reversed(missing):
+            item = Path(
+                checked_path(
+                    str(item),
+                    purpose="generated PSCAD documentation root",
+                    for_write=True,
+                )
+            )
+            item.mkdir()
+        return checked_path(
+            str(target),
+            purpose="generated PSCAD documentation root",
+            for_write=True,
+        )
+
+    def _prepare_output_dirs(self) -> None:
+        self.md_dir = self._ensure_directory(self.md_dir)
+        self.raw_dir = self._ensure_directory(self.raw_dir)
 
     def sync(self) -> List[str]:
         """Synchronize reference files from the installed mhi-pscad library."""
+        self._prepare_output_dirs()
         results = []
         for mod_name in self.MODULES:
             try:

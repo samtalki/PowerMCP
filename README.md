@@ -161,7 +161,7 @@ compile_opendss_file(dss_file="feeder.dss")
 
 PowerWorld `.pwd` display files decode separately via `display(path=...)`, which returns the diagram canvas and each substation's display coordinates. The display geometry is distinct from the `.pwb`/`.aux` case data.
 
-PowerIO MCP tools accept local paths and `file://` URIs. Nonlocal URI schemes are rejected. Set `POWERIO_MCP_ALLOWED_ROOTS` to an `os.pathsep` separated list of directories to constrain MCP reads and writes. The same variable constrains the ANDES, Egret, PyPSA, surge, PowerWorld, and pandapower bridges: they apply powerio's policy through `powermcp.sandbox`, which re-exports it.
+PowerIO MCP tools accept local paths and `file://` URIs. Nonlocal URI schemes are rejected. Set `POWERIO_MCP_ALLOWED_ROOTS` to an `os.pathsep` separated list of directories to constrain reads and writes across every PowerMCP server. Directory readers preflight every descendant; PyPSA and surge install directory outputs from a private sibling staging directory. Generated run directories and every PyPSA `network_name` pass through the same policy. Put `POWERMCP_HOME` under an allowed root if ANDES, Egret, or LTSpice should write run artifacts while containment is enabled. These checks do not remove the filesystem race between a successful preflight and a backend's later open call.
 
 ### Running from a clone (without installing)
 

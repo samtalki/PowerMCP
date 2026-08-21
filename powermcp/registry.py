@@ -177,7 +177,7 @@ TOOLS: dict[str, "Tool"] = {
         Tool(
             "powerfactory", "PowerFactory", "closed-source", windows_only=_W, extra="powerfactory",
             server_dir="PowerFactory", run_kind="script", entry_rel="MCP_PowerFactory.py",
-            probe="fastmcp",
+            probe=None,
             config_keys=(
                 ConfigKey(
                     "python_path",

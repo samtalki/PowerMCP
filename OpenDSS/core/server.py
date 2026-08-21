@@ -2,7 +2,7 @@
 
 import core.engine  # noqa: F401 — ensure DSS + dss_tools wired before tools run
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer as FastMCP
 
 from opendss_tools.configuration import register_configuration_tools
 from opendss_tools.interactive_view import register_interactive_view_tools

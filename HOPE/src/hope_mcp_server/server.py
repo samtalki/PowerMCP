@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer as FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
 from .core import (
@@ -91,13 +91,7 @@ def configured_transport_security(
 def create_mcp_server(
     *,
     read_only: bool = False,
-    host: str | None = None,
-    port: int | None = None,
 ) -> FastMCP:
-    effective_host = host or configured_host()
-    effective_port = port if port is not None else configured_port(
-        DEFAULT_CHATGPT_PORT if read_only else DEFAULT_STDIO_PORT
-    )
     server_name = "hope-mcp-readonly" if read_only else "hope-mcp"
     instructions = (
         "Read-only HOPE MCP server for ChatGPT remote access. "
@@ -117,12 +111,6 @@ def create_mcp_server(
     mcp = FastMCP(
         server_name,
         instructions=instructions,
-        host=effective_host,
-        port=effective_port,
-        transport_security=configured_transport_security(
-            read_only=read_only,
-            host=effective_host,
-        ),
     )
     register_read_tools(mcp)
     if not read_only:

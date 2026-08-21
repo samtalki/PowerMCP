@@ -27,8 +27,11 @@ from powerio.mcp.sandbox import (
     PathNotAllowed,
     allowed_roots,
     check_allowed_path,
+    check_allowed_read_tree,
     checked_path,
+    checked_read_tree,
     decode_local_path,
+    staged_directory_write,
 )
 
 __all__ = [
@@ -37,6 +40,9 @@ __all__ = [
     "PathNotAllowed",
     "allowed_roots",
     "check_allowed_path",
+    "check_allowed_read_tree",
     "checked_path",
+    "checked_read_tree",
     "decode_local_path",
+    "staged_directory_write",
 ]

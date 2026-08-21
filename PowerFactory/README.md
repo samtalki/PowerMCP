@@ -10,7 +10,7 @@ A Model Context Protocol (MCP) server that exposes DIgSILENT PowerFactory simula
 Claude / AI assistant
         │  MCP protocol
         ▼
-MCP_PowerFactory.py   ← MCP server (FastMCP)
+MCP_PowerFactory.py   ← MCP Python SDK 2 server
         │  Python calls 
         ▼
 Agent_DIgSILENT.py    ← Simulation engine
@@ -129,7 +129,7 @@ See [requirements.txt](requirements.txt) and [INSTALL.txt](INSTALL.txt) for full
 - Python 3.10+
 - DIgSILENT PowerFactory 2023 or later (with Python interface enabled)
 - PowerFactory Python module path configured through `POWERFACTORY_PYTHON_PATH` or `PYTHONPATH`
-- fastmcp >= 2.0
+- MCP Python SDK 2.x
 - numpy >= 1.26
 - matplotlib >= 3.8
 - pandas >= 1.5

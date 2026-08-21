@@ -1,5 +1,5 @@
-# MCP server framework
-fastmcp>=2.0
+# MCP Python SDK 2 server framework
+mcp>=2,<3
 
 # Scientific stack
 numpy>=1.26

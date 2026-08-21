@@ -3,9 +3,10 @@ import os
 import glob
 import math
 import logging
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer as FastMCP
 from pscad_mcp.core.connection_manager import pscad_manager
 from pscad_mcp.core.executor import robust_executor
+from powermcp.sandbox import checked_path, checked_read_tree
 
 logger = logging.getLogger("pscad-mcp.data")
 
@@ -26,7 +27,17 @@ async def _resolve_psout(name_or_file: str) -> str:
     consolidated binary output). Raises ``FileNotFoundError`` with the searched
     locations if nothing is found.
     """
-    candidate = os.path.abspath(name_or_file)
+    path_like = (
+        os.path.isabs(name_or_file)
+        or os.sep in name_or_file
+        or (os.altsep is not None and os.altsep in name_or_file)
+        or name_or_file.lower().endswith((".psout", ".out"))
+    )
+    candidate = os.path.abspath(
+        checked_path(name_or_file, purpose="name_or_file")
+        if path_like
+        else name_or_file
+    )
     if os.path.isfile(candidate):
         if candidate.lower().endswith(".psout"):
             return candidate
@@ -49,6 +60,7 @@ async def _resolve_psout(name_or_file: str) -> str:
         logger.warning("Could not read temp_folder for %s: %s", name_or_file, e)
 
     for folder in filter(None, [temp_folder]):
+        folder = checked_read_tree(folder, purpose="PSCAD output tree")
         searched.append(folder)
         matches = glob.glob(os.path.join(folder, "*.psout"))
         if matches:

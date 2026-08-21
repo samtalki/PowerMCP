@@ -116,11 +116,11 @@ uv --directory /path/to/HOPE/tools/hope_mcp_server run hope-mcp-server-chatgpt
 
 Important notes:
 
-- This entrypoint uses FastMCP `streamable-http`.
+- This entrypoint uses the MCP Python SDK 2 `streamable-http` transport.
 - It is intended for ChatGPT web developer mode, not Claude Desktop.
 - It does not expose case-running or settings-writing tools.
 - If you publish the service behind Cloudflare Tunnel or another reverse proxy,
-  set `HOPE_MCP_PUBLIC_HOSTNAME` to the public hostname so FastMCP accepts the
+  set `HOPE_MCP_PUBLIC_HOSTNAME` to the public hostname so the MCP server accepts the
   forwarded `Host` header.
 - ChatGPT currently requires a remote HTTPS-reachable MCP endpoint, so you will
   typically place a tunnel or reverse proxy in front of this local process.

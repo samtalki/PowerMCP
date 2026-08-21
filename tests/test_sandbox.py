@@ -16,7 +16,15 @@ import pytest
 
 import powerio.mcp.sandbox
 import powermcp.sandbox
-from powermcp.sandbox import PathNotAllowed, allowed_roots, checked_path
+from PSLF import pslf_mcp
+from PSSE import psse_mcp
+from powermcp.sandbox import (
+    PathNotAllowed,
+    allowed_roots,
+    checked_path,
+    checked_read_tree,
+    staged_directory_write,
+)
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 
@@ -31,9 +39,20 @@ GUARDED = {
         "load_network_from_any": ["file_path"],
     },
     "PyPSA/pypsa_mcp.py": {
+        "get_network_info": ["network_name"],
         "load_network": ["file_path"],
+        "run_power_flow": ["network_name"],
+        "run_contingency_analysis": ["network_name"],
+        "get_component_details": ["network_name"],
+        "add_bus": ["network_name"],
+        "add_generator": ["network_name"],
+        "add_load": ["network_name"],
+        "add_line": ["network_name"],
+        "add_storage_unit": ["network_name"],
+        "optimize_network": ["network_name"],
+        "optimize_investment": ["network_name"],
         "import_from_csv_folder": ["folder_path"],
-        "export_to_csv_folder": ["folder_path"],
+        "export_to_csv_folder": ["network_name", "folder_path"],
         "import_case_from_any": ["file_path", "output_path"],
         "import_case_from_json": ["output_path"],
     },
@@ -57,18 +76,11 @@ GUARDED = {
     "PowerWorld/powerworld_mcp.py": {
         "open_case": ["case_path"],
     },
-}
-
-# Path-taking tools the policy does not reach: an operator who sets
-# POWERIO_MCP_ALLOWED_ROOTS constrains the servers above and none of these.
-# Guarding one fails the test until it moves to GUARDED.
-UNGUARDED = {
     "LTSpice/ltspice_mcp.py": {
-        # `open(log_file_path).read()` returned to the model verbatim.
         "read_simulation_log": ["log_file_path"],
         "list_available_traces": ["raw_file_path"],
-        "plot_specific_traces": ["raw_file_path"],
-        "run_simulation": ["netlist_path"],
+        "plot_specific_traces": ["raw_file_path", "session_dir"],
+        "run_simulation": ["netlist_path", "session_dir"],
         "view_netlist_in_ltspice": ["netlist_path"],
     },
     "OpenDSS/opendss_tools/configuration.py": {
@@ -92,6 +104,18 @@ def test_the_policy_is_powerios(monkeypatch):
     """
     assert powermcp.sandbox.checked_path is powerio.mcp.sandbox.checked_path
     assert powermcp.sandbox.allowed_roots is powerio.mcp.sandbox.allowed_roots
+    assert (
+        powermcp.sandbox.check_allowed_read_tree
+        is powerio.mcp.sandbox.check_allowed_read_tree
+    )
+    assert (
+        powermcp.sandbox.checked_read_tree
+        is powerio.mcp.sandbox.checked_read_tree
+    )
+    assert (
+        powermcp.sandbox.staged_directory_write
+        is powerio.mcp.sandbox.staged_directory_write
+    )
 
 
 @pytest.mark.parametrize("env", ROOT_ENVS)
@@ -196,7 +220,7 @@ def _checked_arguments(server: str) -> dict[str, set[str]]:
             if isinstance(target, ast.Name)
             and isinstance(inner.value, ast.Call)
             and isinstance(inner.value.func, ast.Name)
-            and inner.value.func.id == "checked_path"
+            and inner.value.func.id in {"checked_path", "checked_read_tree"}
         }
         for node in ast.walk(tree)
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
@@ -214,14 +238,68 @@ def test_every_path_taking_tool_checks_its_argument(server):
         assert not missing, f"{server}: {name} does not check {sorted(missing)}"
 
 
-@pytest.mark.parametrize("server", sorted(UNGUARDED))
-def test_the_unguarded_inventory_is_accurate(server):
-    if not (REPO / server).exists():
-        pytest.skip(f"{server} not present")
-    checked = _checked_arguments(server)
-    for name, args in UNGUARDED[server].items():
-        assert name in checked, f"{server}: {name} is gone; drop it from UNGUARDED"
-        now_checked = set(args) & checked[name]
-        assert not now_checked, (
-            f"{server}: {name} now checks {sorted(now_checked)}; move it to GUARDED"
-        )
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
+def test_read_tree_refuses_an_escaping_descendant(monkeypatch, tmp_path):
+    root = tmp_path / "allowed"
+    tree = root / "dataset"
+    outside = tmp_path / "outside.csv"
+    tree.mkdir(parents=True)
+    outside.write_text("outside")
+    (tree / "buses.csv").symlink_to(outside)
+    monkeypatch.setenv("POWERIO_MCP_ALLOWED_ROOTS", str(root))
+
+    with pytest.raises(PathNotAllowed, match="outside its allowed MCP root"):
+        checked_read_tree(str(tree), purpose="dataset")
+
+
+def test_staged_directory_write_preserves_unrelated_files(tmp_path):
+    output = tmp_path / "tables"
+    output.mkdir()
+    (output / "keep.txt").write_text("keep")
+    (output / "buses.csv").write_text("old")
+
+    def write(staging):
+        path = pathlib.Path(staging) / "buses.csv"
+        path.write_text("new")
+        return {"dir": staging, "files": [str(path)]}
+
+    result = staged_directory_write(str(output), True, write)
+    assert (output / "keep.txt").read_text() == "keep"
+    assert (output / "buses.csv").read_text() == "new"
+    assert result["dir"] == str(output)
+    assert result["files"] == [str(output / "buses.csv")]
+
+
+def test_psse_command_name_is_not_a_spec_path():
+    result = psse_mcp.lookup_psspy_command("../../pyproject")
+    assert result["status"] == "error"
+    assert "ASCII Python identifier" in result["message"]
+
+
+def test_psse_generic_file_arguments_use_the_shared_policy(tmp_path, monkeypatch):
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    outside = tmp_path / "outside.snp"
+    monkeypatch.setenv("POWERIO_MCP_ALLOWED_ROOTS", str(allowed))
+    spec = {
+        "parameters": [
+            {"name": "sfile", "description": "Snapshot file. (input)."}
+        ]
+    }
+
+    with pytest.raises(PathNotAllowed, match="outside allowed MCP roots"):
+        psse_mcp._guard_psspy_path_arguments(spec, {"sfile": str(outside)})
+
+
+def test_pslf_generated_outputs_use_the_shared_policy(tmp_path, monkeypatch):
+    allowed = tmp_path / "allowed"
+    working = tmp_path / "working"
+    allowed.mkdir()
+    working.mkdir()
+    monkeypatch.chdir(working)
+    monkeypatch.setenv("POWERIO_MCP_ALLOWED_ROOTS", str(allowed))
+
+    result = pslf_mcp.save_case()
+    assert result["status"] == "error unknown"
+    assert "outside allowed MCP roots" in result["message"]

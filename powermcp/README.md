@@ -18,8 +18,8 @@ Requires **Python 3.10+**.
 pip install powermcp
 ```
 
-The base install includes only the two zero-setup open-source engines: **pandapower**
-and **PyPSA**. Everything else is opt-in via an extra:
+The base install includes **pandapower**, **PyPSA**, and the **PowerIO** conversion
+server. Everything else is opt-in via an extra:
 
 ```bash
 pip install "powermcp[psse]"            # one tool
@@ -35,7 +35,7 @@ pip install "powermcp[all]"             # everything
 
 | Extra | Tool(s) | Notes |
 |---|---|---|
-| *(none / core)* | pandapower, PyPSA | always installed |
+| *(none / core)* | pandapower, PyPSA, PowerIO | always installed |
 | `andes` | ANDES | |
 | `egret` | Egret | + needs an external solver (ipopt/Gurobi) |
 | `opendss` | OpenDSS | |

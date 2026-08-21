@@ -6,7 +6,7 @@ A comprehensive Model Context Protocol (MCP) server for PyPSA (Python for Power 
 
 - [PyPSA](https://pypsa.org/) >= 0.25.0
 - Python 3.10 or higher
-- MCP and FastMCP packages
+- MCP Python SDK 2.x
 - At least one LP solver supported by PyPSA:
   - **Open Source**: HiGHS (recommended), CBC, GLPK
   - **Commercial**: Gurobi (Acadenic License available)
