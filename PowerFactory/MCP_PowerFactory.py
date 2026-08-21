@@ -345,8 +345,8 @@ def run_loadflow(
         try:
             cfg = SimulationConfig.from_json(path)
             output_dir = getattr(cfg, "output_dir", output_dir) or output_dir
-            output_dir = checked_path(
-                output_dir, purpose="configured output directory", for_write=True
+            output_dir = _ensure_checked_directory(
+                output_dir, purpose="configured output directory"
             )
             run_label = getattr(cfg, "run_label", run_label) or run_label
         except Exception as e:
@@ -414,8 +414,8 @@ def run_simulation(
     SimulationConfig, DIgSILENTAgent = _load_modules()
     path = checked_path(cfg_path, purpose="cfg_path") if cfg_path else _default_cfg_path()
     cfg = SimulationConfig.from_json(path)
-    cfg.output_dir = checked_path(
-        cfg.output_dir, purpose="configured output directory", for_write=True
+    cfg.output_dir = _ensure_checked_directory(
+        cfg.output_dir, purpose="configured output directory"
     )
     cfg.export_pfd = 1 if export_pfd else 0
     cfg.open_digsilent = 1 if open_digsilent else 0
@@ -491,8 +491,8 @@ def run_custom_case(
     SimulationConfig, DIgSILENTAgent = _load_modules()
     path = checked_path(cfg_path, purpose="cfg_path") if cfg_path else _default_cfg_path()
     cfg = SimulationConfig.from_json(path)
-    cfg.output_dir = checked_path(
-        cfg.output_dir, purpose="configured output directory", for_write=True
+    cfg.output_dir = _ensure_checked_directory(
+        cfg.output_dir, purpose="configured output directory"
     )
     if create_new_study_case:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")

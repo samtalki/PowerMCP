@@ -40,12 +40,9 @@ dependencies = [
     # imports the latter, so the floor tracks that, not just powerio's own
     # [mcp] extra requirement (mcp>=2,<3).
     "mcp>=2,<3",
-    # powerio is the cross-server exchange substrate (the pandapower/Egret/PyPSA/
-    # ANDES bridges build on its JSON transport), and is cheap to require: abi3
-    # wheels for five platforms, zero required runtime deps, [mcp,matrix] adding
-    # only scipy (already transitive via pandapower) on top of mcp+numpy.
-    # >=0.9.0: 0.9.0 removed the deprecated Network/DistNetwork names outright,
-    # so a floor that admits 0.4.x is a lie about what this repo runs against.
+    # powerio supplies the conversion server, shared JSON transports, and path
+    # policy used by the pandapower, Egret, PyPSA, and ANDES bridges.
+    # PowerMCP uses APIs introduced in powerio 0.9.0.
     # powerio ships the server itself (`python -m powerio.mcp`), so this repo
     # bundles no copy of it and `powermcp run powerio` runs powerio's.
     "powerio[mcp,matrix]>=0.9.0",

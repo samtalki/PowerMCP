@@ -9,8 +9,10 @@ bridge server to actually using it.
 from __future__ import annotations
 
 import ast
+import json
 import os
 import pathlib
+import re
 
 import pytest
 
@@ -51,7 +53,7 @@ GUARDED = {
         "add_storage_unit": ["network_name"],
         "optimize_network": ["network_name"],
         "optimize_investment": ["network_name"],
-        "import_from_csv_folder": ["folder_path"],
+        "import_from_csv_folder": ["folder_path", "output_path"],
         "export_to_csv_folder": ["network_name", "folder_path"],
         "import_case_from_any": ["file_path", "output_path"],
         "import_case_from_json": ["output_path"],
@@ -220,7 +222,8 @@ def _checked_arguments(server: str) -> dict[str, set[str]]:
             if isinstance(target, ast.Name)
             and isinstance(inner.value, ast.Call)
             and isinstance(inner.value.func, ast.Name)
-            and inner.value.func.id in {"checked_path", "checked_read_tree"}
+            and inner.value.func.id
+            in {"checked_path", "checked_read_tree", "_checked_network_source"}
         }
         for node in ast.walk(tree)
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
@@ -282,14 +285,113 @@ def test_psse_generic_file_arguments_use_the_shared_policy(tmp_path, monkeypatch
     allowed.mkdir()
     outside = tmp_path / "outside.snp"
     monkeypatch.setenv("POWERIO_MCP_ALLOWED_ROOTS", str(allowed))
-    spec = {
-        "parameters": [
-            {"name": "sfile", "description": "Snapshot file. (input)."}
-        ]
-    }
+    spec = psse_mcp.lookup_psspy_command("case")
 
     with pytest.raises(PathNotAllowed, match="outside allowed MCP roots"):
         psse_mcp._guard_psspy_path_arguments(spec, {"sfile": str(outside)})
+
+
+PSSE_PATH_CASES = (
+    ("pp_accc_multi_case", "accfiles", True),
+    ("accc_multiple_merge", "acfiles", True),
+    ("accc_multiple_run_report", "acfiles", True),
+    ("accc_multiple_run_report_2", "acfiles", True),
+    ("runiplanfile", "iplname", False),
+    ("runrspnsfile", "rspname", False),
+    ("setdiagautofile", "autoname", False),
+)
+
+
+@pytest.mark.parametrize("command,parameter,is_array", PSSE_PATH_CASES)
+@pytest.mark.parametrize("spelling", ["absolute", "traversal"])
+def test_psse_audited_path_arguments_refuse_outside_roots(
+    tmp_path, monkeypatch, command, parameter, is_array, spelling
+):
+    allowed = tmp_path / "allowed"
+    outside = tmp_path / "outside"
+    allowed.mkdir()
+    outside.mkdir()
+    monkeypatch.setenv("POWERIO_MCP_ALLOWED_ROOTS", str(allowed))
+    candidate = outside / "commands.idv"
+    if spelling == "traversal":
+        candidate = allowed / ".." / "outside" / "commands.idv"
+    value = [str(candidate)] if is_array else str(candidate)
+    spec = psse_mcp.lookup_psspy_command(command)
+
+    with pytest.raises(PathNotAllowed, match="outside allowed MCP roots"):
+        psse_mcp._guard_psspy_path_arguments(spec, {parameter: value})
+
+
+def test_psse_path_metadata_matches_the_bundled_specs():
+    metadata = json.loads(psse_mcp.PATH_PARAMETER_METADATA.read_text())
+    assert metadata["schema"] == 1
+    for command, parameters in metadata["commands"].items():
+        spec = psse_mcp.lookup_psspy_command(command)
+        assert "status" not in spec, command
+        spec_names = {parameter["name"] for parameter in spec["parameters"]}
+        assert set(parameters) <= spec_names, command
+        assert set(parameters.values()) <= {"path", "paths", "path-index-2"}
+
+
+# A parameter name or description that mentions a file, path, directory or
+# folder. Deliberately broad: every hit must be either guarded or recorded as
+# reviewed, so regenerating the bundled specs cannot quietly unguard one.
+PSSE_PATHISH_NAME = re.compile(
+    r"(file|fname|path|folder|zip|csv|xml|iplname|rspname|autoname)", re.I
+)
+PSSE_PATHISH_DESCRIPTION = re.compile(
+    r"\b(file|filename|path|pathname|directory|folder)\b", re.I
+)
+
+
+def test_psse_path_metadata_covers_every_pathish_spec_parameter():
+    metadata = json.loads(psse_mcp.PATH_PARAMETER_METADATA.read_text())
+    commands = metadata["commands"]
+    reviewed = metadata["reviewed_non_paths"]
+    undeclared = []
+    for spec_file in sorted(psse_mcp.JSON_DIR.glob("*.json")):
+        command = spec_file.stem
+        if command == "_index":
+            continue
+        spec = json.loads(spec_file.read_text(encoding="utf-8"))
+        declared = commands.get(command, {})
+        excused = reviewed.get(command, [])
+        for parameter in spec.get("parameters", []):
+            name = str(parameter.get("name", ""))
+            description = str(parameter.get("description", ""))
+            if name in declared or name in excused:
+                continue
+            if PSSE_PATHISH_NAME.search(name) or PSSE_PATHISH_DESCRIPTION.search(
+                description
+            ):
+                undeclared.append(f"{command}.{name}")
+    assert not undeclared, (
+        "path-carrying psspy parameters with no containment decision: "
+        + ", ".join(undeclared)
+    )
+
+
+def test_psse_reviewed_non_paths_name_real_unguarded_parameters():
+    metadata = json.loads(psse_mcp.PATH_PARAMETER_METADATA.read_text())
+    for command, names in metadata["reviewed_non_paths"].items():
+        spec = psse_mcp.lookup_psspy_command(command)
+        assert "status" not in spec, command
+        spec_names = {parameter["name"] for parameter in spec["parameters"]}
+        assert set(names) <= spec_names, command
+        assert not set(names) & set(metadata["commands"].get(command, {})), command
+
+
+def test_psse_structured_module_path_checks_only_its_path_field(tmp_path, monkeypatch):
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    outside = tmp_path / "outside"
+    monkeypatch.setenv("POWERIO_MCP_ALLOWED_ROOTS", str(allowed))
+    spec = psse_mcp.lookup_psspy_command("addconditionelement")
+
+    with pytest.raises(PathNotAllowed, match="outside allowed MCP roots"):
+        psse_mcp._guard_psspy_path_arguments(
+            spec, {"elmtkey": ["module", "function", str(outside)]}
+        )
 
 
 def test_pslf_generated_outputs_use_the_shared_policy(tmp_path, monkeypatch):

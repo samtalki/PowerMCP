@@ -2,7 +2,6 @@ import sys
 import os
 import json
 import io
-import re
 from pathlib import Path
 
 from mcp.server.mcpserver import MCPServer as FastMCP
@@ -69,8 +68,28 @@ def _ensure_psse():
 
 # Path to JSON command reference files
 JSON_DIR = Path(__file__).parent / "psspy_command_json"
+PATH_PARAMETER_METADATA = Path(__file__).parent / "psspy_path_parameters.json"
 
-_PATH_DESCRIPTION = re.compile(r"\b(file|filename|path|pathname|directory|folder)\b")
+
+def _load_path_parameter_metadata() -> Dict[str, Dict[str, str]]:
+    """Load the audited path parameters for the bundled command specs.
+
+    `commands` names the arguments to contain. Its sibling `reviewed_non_paths`
+    records the ones that read as paths but are not, so the test suite can hold
+    every spec parameter to a decision rather than to a name heuristic.
+    """
+    with open(PATH_PARAMETER_METADATA, encoding="utf-8") as f:
+        document = json.load(f)
+    if (
+        document.get("schema") != 1
+        or not isinstance(document.get("commands"), dict)
+        or not isinstance(document.get("reviewed_non_paths"), dict)
+    ):
+        raise RuntimeError("invalid PSS/E path parameter metadata")
+    return document["commands"]
+
+
+_PATH_PARAMETERS = _load_path_parameter_metadata()
 
 
 def _command_spec_path(function_name: str) -> Path:
@@ -80,60 +99,57 @@ def _command_spec_path(function_name: str) -> Path:
     return JSON_DIR / f"{function_name}.json"
 
 
-def _named_path_parameter(name: str) -> bool:
-    """Whether a PSS/E parameter name denotes a file or path."""
-    name = name.lower()
-    return "profile" not in name and (
-        name.startswith("file")
-        or name.endswith("file")
-        or name in {"filarg", "csvname", "pathname", "pathzip"}
-    )
-
-
-def _path_parameter(parameter: Dict[str, Any]) -> bool:
-    """Whether a documented scalar PSS/E argument carries a path."""
-    name = str(parameter.get("name", "")).lower()
-    description = str(parameter.get("description", "")).lower()
-    return (
-        _named_path_parameter(name)
-        or _PATH_DESCRIPTION.search(description) is not None
-    )
-
-
-def _checked_path_value(value: Any, *, purpose: str) -> Any:
-    """Check string paths in scalar or array PSS/E arguments."""
+def _checked_path_value(value: Any, *, purpose: str, sequence: bool) -> Any:
+    """Check one audited scalar path or sequence of paths."""
     if isinstance(value, str):
         if value.strip() in {"", "*"}:
             return value
         return checked_path(value, purpose=purpose, for_write=True)
-    if isinstance(value, list):
+    if sequence and isinstance(value, list):
         return [
-            _checked_path_value(item, purpose=f"{purpose}[{index}]")
+            _checked_path_value(
+                item, purpose=f"{purpose}[{index}]", sequence=True
+            )
             for index, item in enumerate(value)
         ]
-    if isinstance(value, tuple):
+    if sequence and isinstance(value, tuple):
         return tuple(
-            _checked_path_value(item, purpose=f"{purpose}[{index}]")
+            _checked_path_value(
+                item, purpose=f"{purpose}[{index}]", sequence=True
+            )
             for index, item in enumerate(value)
         )
     return value
 
 
+def _checked_path_at_index(value: Any, *, purpose: str, index: int) -> Any:
+    """Check one path field in a documented structured sequence."""
+    if not isinstance(value, (list, tuple)) or len(value) <= index:
+        return value
+    checked = list(value)
+    checked[index] = _checked_path_value(
+        checked[index], purpose=f"{purpose}[{index}]", sequence=False
+    )
+    return tuple(checked) if isinstance(value, tuple) else checked
+
+
 def _guard_psspy_path_arguments(
     spec: Dict[str, Any], arguments: Dict[str, Any]
 ) -> Dict[str, Any]:
-    """Apply the shared containment policy to documented file arguments."""
+    """Apply containment to paths named in the audited spec metadata."""
     guarded = dict(arguments)
-    for parameter in spec.get("parameters", []):
-        name = str(parameter.get("name", ""))
-        if name in guarded and _path_parameter(parameter):
-            value = guarded[name]
-            # A description can mention a path as one field of a structured
-            # array. Only name-identified path arrays are safe to check item by
-            # item; description-identified scalar strings are checked directly.
-            if isinstance(value, str) or _named_path_parameter(name):
+    function_name = str(spec.get("function_name", ""))
+    parameters = _PATH_PARAMETERS.get(function_name, {})
+    for name, kind in parameters.items():
+        if name in guarded:
+            purpose = f"arguments.{name}"
+            if kind == "path-index-2":
+                guarded[name] = _checked_path_at_index(
+                    guarded[name], purpose=purpose, index=2
+                )
+            else:
                 guarded[name] = _checked_path_value(
-                    value, purpose=f"arguments.{name}"
+                    guarded[name], purpose=purpose, sequence=kind == "paths"
                 )
     return guarded
 

@@ -102,7 +102,7 @@ def test_an_out_of_date_dependency_is_not_reported_ok(monkeypatch):
     monkeypatch.setattr(doctor, "version", lambda name: "0.0.1")
     style, msg = doctor._dep_status(get_tool("powerio"))
     assert style == "red"
-    assert "below the required" in msg
+    assert "does not satisfy" in msg
 
 
 def test_the_floor_is_found_when_the_probe_is_not_the_distribution_name():
@@ -118,7 +118,20 @@ def test_an_out_of_date_dependency_under_another_name_is_caught(monkeypatch):
     monkeypatch.setattr(doctor, "version", lambda name: "3.0")
     style, msg = doctor._dep_status(get_tool("hope"))
     assert style == "red"
-    assert "3.0 is below the required" in msg and "6.0" in msg
+    assert "3.0 does not satisfy" in msg and "6.0" in msg
+
+
+def test_a_version_above_an_upper_bound_is_not_called_below(monkeypatch):
+    monkeypatch.setattr(
+        doctor, "_declared_requirement", lambda probe: doctor.Requirement("mcp>=2,<3")
+    )
+    monkeypatch.setattr(doctor, "version", lambda name: "3.0")
+
+    style, msg = doctor._version_status("mcp")
+
+    assert style == "red"
+    assert "does not satisfy" in msg
+    assert "below" not in msg
 
 
 def test_a_version_that_does_not_parse_is_not_called_out_of_date(monkeypatch):

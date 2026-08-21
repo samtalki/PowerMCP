@@ -19,8 +19,10 @@ tests/data/powerworld/ACTIVSg200.pwd is vendored from powerio's test suite
 from __future__ import annotations
 
 import asyncio
+import builtins
 import importlib
 import json
+import pickle
 import sys
 import types
 from pathlib import Path
@@ -332,9 +334,38 @@ def test_pypsa_csv_import_preflights_the_complete_tree(tmp_path, monkeypatch):
     (dataset / "buses.csv").symlink_to(outside)
     monkeypatch.setenv("POWERIO_MCP_ALLOWED_ROOTS", str(allowed))
 
-    result = pypsa_mcp.import_from_csv_folder(str(dataset))
+    result = pypsa_mcp.import_from_csv_folder(
+        str(dataset), str(allowed / "network.nc")
+    )
     assert result["status"] == "error"
     assert "outside its allowed MCP root" in result["message"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlink semantics")
+def test_pypsa_network_read_preflights_a_csv_tree(tmp_path, monkeypatch):
+    allowed = tmp_path / "allowed"
+    dataset = allowed / "network"
+    outside = tmp_path / "outside.csv"
+    dataset.mkdir(parents=True)
+    outside.write_text("name\nsecret\n")
+    (dataset / "buses.csv").symlink_to(outside)
+    monkeypatch.setenv("POWERIO_MCP_ALLOWED_ROOTS", str(allowed))
+
+    with pytest.raises(ValueError, match="outside its allowed MCP root"):
+        pypsa_mcp.get_network_info(str(dataset))
+
+
+def test_pypsa_csv_import_requires_a_checked_explicit_output(tmp_path, monkeypatch):
+    allowed = tmp_path / "allowed"
+    dataset = allowed / "network"
+    dataset.mkdir(parents=True)
+    outside = tmp_path / "outside.nc"
+    monkeypatch.setenv("POWERIO_MCP_ALLOWED_ROOTS", str(allowed))
+
+    result = pypsa_mcp.import_from_csv_folder(str(dataset), str(outside))
+
+    assert result["status"] == "error"
+    assert "outside allowed MCP roots" in result["message"]
 
 
 def test_pypsa_csv_export_is_staged_and_preserves_unrelated_files(tmp_path):
@@ -460,6 +491,29 @@ def test_pandapower_bridge_honors_branch_status(tmp_path):
     assert res["status"] == "success", res
     in_service = panda_mcp._current_net.line["in_service"].tolist()
     assert len(in_service) == 2 and in_service.count(False) == 1, in_service
+
+
+def test_pandapower_pickle_input_is_rejected_without_execution(tmp_path):
+    panda_dir = str(TOOLS["pandapower"].resolve_server_dir())
+    if panda_dir not in sys.path:
+        sys.path.insert(0, panda_dir)
+    import panda_mcp  # noqa: E402
+
+    marker = tmp_path / "pickle-executed"
+
+    class Payload:
+        def __reduce__(self):
+            statement = f"open({str(marker)!r}, 'w').write('executed')"
+            return builtins.exec, (statement,)
+
+    payload = tmp_path / "network.p"
+    payload.write_bytes(pickle.dumps(Payload()))
+
+    result = panda_mcp.load_network(str(payload))
+
+    assert result["status"] == "error"
+    assert "Use a .json file" in result["message"]
+    assert not marker.exists()
 
 
 def test_matrix_laplacian():

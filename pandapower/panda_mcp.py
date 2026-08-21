@@ -57,10 +57,10 @@ def create_empty_network() -> Dict[str, Any]:
 
 @mcp.tool()
 def load_network(file_path: str) -> Dict[str, Any]:
-    """Load a pandapower network from a file.
+    """Load a pandapower network from a JSON file.
     
     Args:
-        file_path: Path to the network file (.json, .p)
+        file_path: Path to the network file (.json)
         
     Returns:
         Dict containing status and network information
@@ -74,10 +74,8 @@ def load_network(file_path: str) -> Dict[str, Any]:
     try:
         if file_path.endswith('.json'):
             _current_net = pp.from_json(file_path)
-        elif file_path.endswith('.p'):
-            _current_net = pp.from_pickle(file_path)
         else:
-            raise ValueError("Unsupported file format. Use .json or .p files.")
+            raise ValueError("Unsupported file format. Use a .json file.")
             
         return {
             "status": "success",

@@ -44,7 +44,12 @@ async def _resolve_psout(name_or_file: str) -> str:
         if candidate.lower().endswith(".out"):
             # The legacy .out ASCII format is not readable by mhi.psout; prefer a
             # sibling .psout written by the same run, if present.
-            siblings = glob.glob(os.path.join(os.path.dirname(candidate), "*.psout"))
+            siblings = [
+                checked_path(path, purpose="sibling PSOUT file")
+                for path in glob.glob(
+                    os.path.join(os.path.dirname(candidate), "*.psout")
+                )
+            ]
             if siblings:
                 return max(siblings, key=os.path.getmtime)
             return candidate  # let mhi.psout.File raise a clear error

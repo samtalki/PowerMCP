@@ -8,9 +8,9 @@ import-probed at all — they are reported via their configured paths and verifi
 for real only at runtime.
 
 Two checks are shared rather than per tool and print below the table: the MCP
-SDK, which every server imports, and the filesystem containment policy, which
-every path-taking tool applies. Both matter here because a server that fails at
-launch gives its MCP client nothing at all — the diagnosis only exists in a
+SDK, which every server imports, and the configured roots used by servers that
+call the shared filesystem policy. Both matter here because a server that fails
+at launch gives its MCP client nothing at all — the diagnosis only exists in a
 stderr the client does not read — so the doctor has to catch it beforehand.
 """
 
@@ -79,7 +79,7 @@ def _declared_requirement(probe: str) -> Requirement | None:
 
 
 def _version_status(probe: str) -> tuple[str, str] | None:
-    """(style, message) when the installed version violates our declared floor.
+    """(style, message) when the installed version violates our requirement.
 
     ``find_spec`` answers "importable", which is a different question from "new
     enough": an old powerio imports fine and then refuses tools this repo calls.
@@ -96,7 +96,7 @@ def _version_status(probe: str) -> tuple[str, str] | None:
         return None
     if req.specifier.contains(installed, prereleases=True):
         return None
-    return "red", f"{req.name} {installed} is below the required {req.name}{req.specifier}"
+    return "red", f"{req.name} {installed} does not satisfy {req.name}{req.specifier}"
 
 
 def _dep_status(t: Tool) -> tuple[str, str]:

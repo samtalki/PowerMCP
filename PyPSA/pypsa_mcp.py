@@ -35,12 +35,17 @@ def _to_serializable(obj: Any) -> Any:
 mcp = FastMCP("PyPSA-MCP")
 
 
+def _checked_network_source(value: str, *, purpose: str) -> str:
+    """Preflight a NetCDF file or every descendant of a CSV directory."""
+    return checked_read_tree(value, purpose=purpose)
+
+
 # ============= Network Information =============
 
 @mcp.tool()
 def get_network_info(network_name: str) -> Dict[str, Any]:
     """Get basic information about the network"""
-    network_name = checked_path(network_name, purpose="network_name")
+    network_name = _checked_network_source(network_name, purpose="network_name")
     network = Network(network_name)
     info = {
         "buses": len(network.buses),
@@ -58,7 +63,7 @@ def get_network_info(network_name: str) -> Dict[str, Any]:
 def load_network(file_path: str) -> Dict[str, Any]:
     """Load a PyPSA network from a NetCDF (.nc) file"""
     try:
-        file_path = checked_path(file_path, purpose="file_path")
+        file_path = _checked_network_source(file_path, purpose="file_path")
     except PathNotAllowed as exc:
         return {"status": "error", "message": str(exc)}
     try:
@@ -86,7 +91,7 @@ def load_network(file_path: str) -> Dict[str, Any]:
 def run_power_flow(network_name: str, linear: bool = False) -> Dict[str, Any]:
     """Run a non-linear (AC) or linear (DC) power flow on the network"""
     try:
-        network_name = checked_path(network_name, purpose="network_name")
+        network_name = _checked_network_source(network_name, purpose="network_name")
         network = Network(network_name)
         
         if linear:
@@ -140,7 +145,7 @@ def run_contingency_analysis(
     """
     try:
         # --- Base case ---
-        network_name = checked_path(network_name, purpose="network_name")
+        network_name = _checked_network_source(network_name, purpose="network_name")
         network = Network(network_name)
         network.pf(use_seed=True)
 
@@ -271,7 +276,7 @@ def get_component_details(
     component_id: Optional[str] = None
 ) -> Dict[str, Any]:
     """Get detailed information about a specific component or all components of a type"""
-    network_name = checked_path(network_name, purpose="network_name")
+    network_name = _checked_network_source(network_name, purpose="network_name")
     network = Network(network_name)
     
     if not hasattr(network, component_type):
@@ -326,7 +331,7 @@ def add_bus(
     carrier: str = "AC"
 ) -> Dict[str, Any]:
     """Add a bus to the network"""
-    network_name = checked_path(network_name, purpose="network_name")
+    network_name = _checked_network_source(network_name, purpose="network_name")
     network = Network(network_name)
     network.add("Bus", bus_id, v_nom=v_nom, x=x, y=y, carrier=carrier)
     network.export_to_netcdf(network_name)
@@ -347,7 +352,7 @@ def add_generator(
     p_max_pu: float = 1.0
 ) -> Dict[str, Any]:
     """Add a generator to the network"""
-    network_name = checked_path(network_name, purpose="network_name")
+    network_name = _checked_network_source(network_name, purpose="network_name")
     network = Network(network_name)
     network.add(
         "Generator",
@@ -373,7 +378,7 @@ def add_load(
     p_set: float
 ) -> Dict[str, Any]:
     """Add a load to the network"""
-    network_name = checked_path(network_name, purpose="network_name")
+    network_name = _checked_network_source(network_name, purpose="network_name")
     network = Network(network_name)
     network.add("Load", load_id, bus=bus, p_set=p_set)
     network.export_to_netcdf(network_name)
@@ -394,7 +399,7 @@ def add_line(
     length: float = 1.0
 ) -> Dict[str, Any]:
     """Add a transmission line to the network"""
-    network_name = checked_path(network_name, purpose="network_name")
+    network_name = _checked_network_source(network_name, purpose="network_name")
     network = Network(network_name)
     network.add(
         "Line",
@@ -424,7 +429,7 @@ def add_storage_unit(
     cyclic_state_of_charge: bool = True
 ) -> Dict[str, Any]:
     """Add a storage unit to the network"""
-    network_name = checked_path(network_name, purpose="network_name")
+    network_name = _checked_network_source(network_name, purpose="network_name")
     network = Network(network_name)
     network.add(
         "StorageUnit",
@@ -453,7 +458,7 @@ def optimize_network(
     solver_options: Optional[Dict] = None
 ) -> Dict[str, Any]:
     """Run a linear optimal power flow (LOPF) on the network"""
-    network_name = checked_path(network_name, purpose="network_name")
+    network_name = _checked_network_source(network_name, purpose="network_name")
     network = Network(network_name)
     
     try:
@@ -505,7 +510,7 @@ def optimize_investment(
     multi_investment_periods: bool = False
 ) -> Dict[str, Any]:
     """Run investment optimization to determine optimal capacity expansion"""
-    network_name = checked_path(network_name, purpose="network_name")
+    network_name = _checked_network_source(network_name, purpose="network_name")
     network = Network(network_name)
     
     try:
@@ -555,24 +560,26 @@ def optimize_investment(
         }
 
 @mcp.tool()
-def import_from_csv_folder(folder_path: str) -> Dict[str, Any]:
-    """Import network from CSV files"""
+def import_from_csv_folder(folder_path: str, output_path: str) -> Dict[str, Any]:
+    """Import a CSV network and save it to an explicit NetCDF path."""
     try:
         folder_path = checked_read_tree(folder_path, purpose="folder_path")
     except PathNotAllowed as exc:
         return {"status": "error", "message": str(exc)}
     try:
+        output_path = checked_path(
+            output_path, purpose="output_path", for_write=True
+        )
+    except PathNotAllowed as exc:
+        return {"status": "error", "message": str(exc)}
+    try:
         network = Network()
         network.import_from_csv_folder(folder_path)
-        network_name = checked_path(
-            os.path.basename(os.path.normpath(folder_path)) + ".nc",
-            purpose="generated network path",
-            for_write=True,
-        )
-        network.export_to_netcdf(network_name)
+        network.export_to_netcdf(output_path)
         return {
             "status": "success",
-            "message": f"Network imported from {folder_path} and saved to {network_name}"
+            "message": f"Network imported from {folder_path} and saved to {output_path}",
+            "network_file": output_path,
         }
     except Exception as e:
         return {
@@ -588,7 +595,7 @@ def export_to_csv_folder(network_name: str, folder_path: str) -> Dict[str, Any]:
     except PathNotAllowed as exc:
         return {"status": "error", "message": str(exc)}
     try:
-        network_name = checked_path(network_name, purpose="network_name")
+        network_name = _checked_network_source(network_name, purpose="network_name")
         network = Network(network_name)
         staged_directory_write(
             folder_path,
