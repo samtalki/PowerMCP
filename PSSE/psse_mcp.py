@@ -104,6 +104,7 @@ _PROHIBITED_PSSPY_COMMANDS = frozenset(
         "addpythoncontingencyelement",
         "addpythonremedialactionelement",
         "addremedialactionelement",
+        "dropmodellibrary",
         "launch_program",
         "runiplanfile",
         "runrspnsfile",

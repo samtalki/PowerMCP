@@ -288,6 +288,7 @@ PSSE_PROHIBITED_COMMANDS = (
     "addpythoncontingencyelement",
     "addpythonremedialactionelement",
     "addremedialactionelement",
+    "dropmodellibrary",
     "launch_program",
     "runiplanfile",
     "runrspnsfile",
