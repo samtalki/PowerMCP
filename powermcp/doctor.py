@@ -69,8 +69,11 @@ def _declared_requirement(probe: str) -> Requirement | None:
     except PackageNotFoundError:
         return None
     provided = {_canonical(d) for d in _distributions(probe)}
-    if not provided:
-        return None
+    # Some wheels omit the top-level-name metadata used by
+    # packages_distributions(). Exact import/distribution names still give us
+    # an unambiguous fallback; the provider map handles names such as
+    # ``yaml``/``PyYAML``.
+    provided.add(_canonical(probe.split(".")[0]))
     for raw in declared:
         req = Requirement(raw)
         if _canonical(req.name) in provided and req.specifier:

@@ -34,7 +34,8 @@ dependencies = [
     "pandapower",
     "pypsa>=0.25.0",
     "numpy>=1.24",
-    "pandas>=2.0",
+    # pandapower's PYPOWER converter does not support pandas 3 yet.
+    "pandas>=2.0,<3",
     # mcp 2.0 moved the server class from mcp.server.fastmcp.FastMCP to
     # mcp.server.mcpserver.MCPServer; every vendored server in this repo now
     # imports the latter, so the floor tracks that, not just powerio's own

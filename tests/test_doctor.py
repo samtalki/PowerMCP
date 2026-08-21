@@ -114,6 +114,14 @@ def test_the_floor_is_found_when_the_probe_is_not_the_distribution_name():
     assert str(req.specifier) == ">=6.0"
 
 
+def test_the_floor_is_found_without_top_level_distribution_metadata(monkeypatch):
+    monkeypatch.setattr(doctor, "_distributions", lambda probe: [])
+    req = doctor._declared_requirement("powerio")
+    assert req is not None
+    assert doctor._canonical(req.name) == "powerio"
+    assert str(req.specifier) == ">=0.9.0"
+
+
 def test_an_out_of_date_dependency_under_another_name_is_caught(monkeypatch):
     monkeypatch.setattr(doctor, "version", lambda name: "3.0")
     style, msg = doctor._dep_status(get_tool("hope"))
