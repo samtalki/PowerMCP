@@ -280,6 +280,57 @@ def test_psse_command_name_is_not_a_spec_path():
     assert "ASCII Python identifier" in result["message"]
 
 
+PSSE_PROHIBITED_COMMANDS = (
+    "addconditionelement",
+    "addcontingencyelement",
+    "addmodellibrary",
+    "addpythonconditionelement",
+    "addpythoncontingencyelement",
+    "addpythonremedialactionelement",
+    "addremedialactionelement",
+    "launch_program",
+    "runiplanfile",
+    "runrspnsfile",
+)
+
+
+@pytest.mark.parametrize("command", PSSE_PROHIBITED_COMMANDS)
+def test_psse_generic_dispatch_refuses_executable_commands_before_engine_start(
+    monkeypatch, command
+):
+    engine_starts = []
+
+    def unexpected_engine_start():
+        engine_starts.append(command)
+        raise AssertionError("PSS/E must not start for a prohibited command")
+
+    monkeypatch.setattr(psse_mcp, "_ensure_psse", unexpected_engine_start)
+    result = psse_mcp.run_psspy_command(command, {})
+
+    assert result["status"] == "error"
+    assert "not available through run_psspy_command" in result["message"]
+    assert engine_starts == []
+
+
+def test_psse_generic_dispatch_still_calls_permitted_command(monkeypatch):
+    calls = []
+
+    class FakePsspy:
+        def nsol(self):
+            calls.append("nsol")
+            return 0
+
+    fake_psspy = FakePsspy()
+    monkeypatch.setattr(psse_mcp, "psspy", fake_psspy)
+    monkeypatch.setattr(psse_mcp, "_ensure_psse", lambda: fake_psspy)
+
+    result = psse_mcp.run_psspy_command("nsol", {})
+
+    assert result["status"] == "success"
+    assert result["_function"] == "nsol"
+    assert calls == ["nsol"]
+
+
 def test_psse_generic_file_arguments_use_the_shared_policy(tmp_path, monkeypatch):
     allowed = tmp_path / "allowed"
     allowed.mkdir()

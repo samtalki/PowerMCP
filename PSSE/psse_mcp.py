@@ -92,6 +92,25 @@ def _load_path_parameter_metadata() -> Dict[str, Dict[str, str]]:
 _PATH_PARAMETERS = _load_path_parameter_metadata()
 
 
+# These APIs load or execute programs, native libraries, Python callbacks, or
+# PSS/E command files. Path containment does not make executable input safe for
+# the generic MCP dispatcher.
+_PROHIBITED_PSSPY_COMMANDS = frozenset(
+    {
+        "addconditionelement",
+        "addcontingencyelement",
+        "addmodellibrary",
+        "addpythonconditionelement",
+        "addpythoncontingencyelement",
+        "addpythonremedialactionelement",
+        "addremedialactionelement",
+        "launch_program",
+        "runiplanfile",
+        "runrspnsfile",
+    }
+)
+
+
 def _command_spec_path(function_name: str) -> Path:
     """Resolve one bundled command spec without treating its name as a path."""
     if not function_name.isascii() or not function_name.isidentifier():
@@ -547,7 +566,10 @@ def solve_case() -> Dict[str, Any]:
 @mcp.tool()
 def run_psspy_command(function_name: str, arguments: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
-    Execute any psspy API command by name, using its JSON reference spec.
+    Execute an allowed psspy API command using its bundled JSON reference spec.
+
+    Commands that load or execute external code are not available through this
+    generic surface.
 
     Loads the command definition from the JSON reference, determines the
     return type, calls the appropriate handler, and returns structured output.
@@ -563,6 +585,15 @@ def run_psspy_command(function_name: str, arguments: Optional[Dict[str, Any]] = 
     """
     if arguments is None:
         arguments = {}
+
+    if function_name in _PROHIBITED_PSSPY_COMMANDS:
+        return {
+            "status": "error",
+            "message": (
+                f"psspy.{function_name} is not available through "
+                "run_psspy_command"
+            ),
+        }
 
     # Load the JSON spec for this function
     try:
