@@ -92,11 +92,13 @@ def _load_path_parameter_metadata() -> Dict[str, Dict[str, str]]:
 _PATH_PARAMETERS = _load_path_parameter_metadata()
 
 
-# These APIs load or execute programs, native libraries, Python callbacks, or
-# PSS/E command files. Path containment does not make executable input safe for
-# the generic MCP dispatcher.
+# These APIs load, execute, or activate programs, native libraries, Python
+# callbacks, user extensions, or PSS/E command files. Path containment does not
+# make executable input safe for the generic MCP dispatcher.
 _PROHIBITED_PSSPY_COMMANDS = frozenset(
     {
+        "accc_ras",
+        "accc_ras_2",
         "addconditionelement",
         "addcontingencyelement",
         "addmodellibrary",
@@ -104,10 +106,19 @@ _PROHIBITED_PSSPY_COMMANDS = frozenset(
         "addpythoncontingencyelement",
         "addpythonremedialactionelement",
         "addremedialactionelement",
+        "allow_pssuserpf",
+        "append_ras",
         "dropmodellibrary",
+        "dropmodelprogram",
+        "getmodfunclist",
         "launch_program",
+        "read_ras",
+        "retry_pssuserpf",
         "runiplanfile",
         "runrspnsfile",
+        "set_input_dev",
+        "setdiagautofile",
+        "user",
     }
 )
 

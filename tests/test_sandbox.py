@@ -281,6 +281,8 @@ def test_psse_command_name_is_not_a_spec_path():
 
 
 PSSE_PROHIBITED_COMMANDS = (
+    "accc_ras",
+    "accc_ras_2",
     "addconditionelement",
     "addcontingencyelement",
     "addmodellibrary",
@@ -288,11 +290,24 @@ PSSE_PROHIBITED_COMMANDS = (
     "addpythoncontingencyelement",
     "addpythonremedialactionelement",
     "addremedialactionelement",
+    "allow_pssuserpf",
+    "append_ras",
     "dropmodellibrary",
+    "dropmodelprogram",
+    "getmodfunclist",
     "launch_program",
+    "read_ras",
+    "retry_pssuserpf",
     "runiplanfile",
     "runrspnsfile",
+    "set_input_dev",
+    "setdiagautofile",
+    "user",
 )
+
+
+def test_psse_prohibited_command_contract_matches_the_server():
+    assert set(PSSE_PROHIBITED_COMMANDS) == psse_mcp._PROHIBITED_PSSPY_COMMANDS
 
 
 @pytest.mark.parametrize("command", PSSE_PROHIBITED_COMMANDS)
