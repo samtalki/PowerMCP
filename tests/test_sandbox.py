@@ -243,7 +243,7 @@ def _checked_arguments(server: str) -> dict[str, set[str]]:
     importing to introspect would skip the check exactly where it matters. The
     guard is a syntactic property and the AST shows it.
     """
-    tree = ast.parse((REPO / server).read_text())
+    tree = ast.parse((REPO / server).read_text(encoding="utf-8"))
     return {
         node.name: {
             target.id
