@@ -141,7 +141,7 @@ TOOLS: dict[str, "Tool"] = {
             "powerio", "PowerIO", "open-source", windows_only=False, extra=None,
             server_dir=None, run_kind="package", module="powerio.mcp",
             probe="powerio",
-            notes="Format-neutral conversion, matrices, and auditable .pio.json packages. Its canonical MCP server owns package operations; pandapower, PyPSA, Egret, and ANDES select package states only at solver handoff.",
+            notes="Format-neutral conversion, matrices, and auditable .pio.json packages. Its canonical MCP server owns package operations; pandapower, PyPSA, Egret, and ANDES resolve package states only when importing into a solver.",
         ),
         # ---- CLOSED-SOURCE / VENDOR ----
         Tool(
@@ -213,7 +213,7 @@ TOOLS: dict[str, "Tool"] = {
 
 # Tools installed by a bare `pip install powermcp` and pre-checked in the wizard.
 # powerio is core because it is the cross-server exchange substrate (the
-# pandapower/Egret/PyPSA/ANDES bridges all build on its JSON transport) and is
+# pandapower/Egret/PyPSA/ANDES integrations all build on its JSON transport) and is
 # cheap: abi3 wheels, zero required runtime deps, extras resolving to numpy
 # (core) + scipy (transitive via pandapower).
 CORE: tuple[str, ...] = ("pandapower", "pypsa", "powerio")

@@ -1,4 +1,4 @@
-"""Tests for the powerio conversion server, the PyPSA bridge, and the
+"""Tests for the PowerIO conversion server, solver integrations, and the
 registry/runner wiring.
 
 The server under test is powerio's own ``powerio.mcp.server``: this repo runs
@@ -264,7 +264,7 @@ def test_package_transport_flows_through_core_tools(tmp_path):
     assert isinstance(diag["diagnostics"], list)
 
 
-def test_pypsa_handoff_accepts_static_package(tmp_path):
+def test_pypsa_interchange_accepts_static_package(tmp_path):
     package_json = powerio.Package.from_file(CASE9).to_json()
     out = tmp_path / "case9-package.nc"
     result = pypsa_mcp.import_case_from_json(package_json, str(out))
@@ -275,7 +275,7 @@ def test_pypsa_handoff_accepts_static_package(tmp_path):
     assert len(pypsa.Network(str(out)).buses) == 9
 
 
-def test_pandapower_handoff_accepts_static_package():
+def test_pandapower_interchange_accepts_static_package():
     panda_dir = str(TOOLS["pandapower"].resolve_server_dir())
     if panda_dir not in sys.path:
         sys.path.insert(0, panda_dir)
@@ -290,7 +290,7 @@ def test_pandapower_handoff_accepts_static_package():
     assert len(panda_mcp._current_net.bus) == 9
 
 
-def test_solver_handoff_requires_explicit_package_state(tmp_path):
+def test_solver_interchange_requires_explicit_package_state(tmp_path):
     package = powerio.Package.from_file(CASE9)
     package.set_operating_points(
         {
@@ -330,7 +330,7 @@ def test_solver_handoff_requires_explicit_package_state(tmp_path):
     assert pypsa.Network(str(out)).generators.iloc[0].p_set == pytest.approx(123.0)
 
 
-def test_solver_handoff_materializes_study_commit(tmp_path):
+def test_solver_interchange_materializes_study_commit(tmp_path):
     package = powerio.Package.from_file(CASE9)
     document = json.loads(package.to_json())
     document["study"] = {
@@ -453,7 +453,7 @@ def test_pypsa_network_read_preflights_a_csv_tree(tmp_path, monkeypatch):
         pypsa_mcp.get_network_info(str(dataset))
 
 
-def test_pypsa_csv_import_requires_a_checked_explicit_output(tmp_path, monkeypatch):
+def test_pypsa_csv_import_checks_an_explicit_output(tmp_path, monkeypatch):
     allowed = tmp_path / "allowed"
     dataset = allowed / "network"
     dataset.mkdir(parents=True)
@@ -461,6 +461,21 @@ def test_pypsa_csv_import_requires_a_checked_explicit_output(tmp_path, monkeypat
     monkeypatch.setenv("POWERIO_MCP_ALLOWED_ROOTS", str(allowed))
 
     result = pypsa_mcp.import_from_csv_folder(str(dataset), str(outside))
+
+    assert result["status"] == "error"
+    assert "outside allowed MCP roots" in result["message"]
+
+
+def test_pypsa_csv_import_keeps_the_checked_legacy_default(tmp_path, monkeypatch):
+    allowed = tmp_path / "allowed"
+    dataset = allowed / "network"
+    dataset.mkdir(parents=True)
+    working = tmp_path / "working"
+    working.mkdir()
+    monkeypatch.chdir(working)
+    monkeypatch.setenv("POWERIO_MCP_ALLOWED_ROOTS", str(allowed))
+
+    result = pypsa_mcp.import_from_csv_folder(str(dataset))
 
     assert result["status"] == "error"
     assert "outside allowed MCP roots" in result["message"]
@@ -579,7 +594,7 @@ def test_pypsa_import_preserves_out_of_service_generator(tmp_path):
 
 
 def test_pandapower_bridge_honors_branch_status(tmp_path):
-    # PowerIO's native pandapower handoff keeps the OOS row and its status.
+    # PowerIO's native pandapower writer keeps the OOS row and its status.
     panda_dir = str(TOOLS["pandapower"].resolve_server_dir())
     if panda_dir not in sys.path:
         sys.path.insert(0, panda_dir)

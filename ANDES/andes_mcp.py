@@ -9,7 +9,7 @@ from pathlib import Path
 from contextlib import redirect_stdout, redirect_stderr
 from mcp.server.mcpserver import MCPServer as FastMCP
 from typing import Dict, Any, Optional
-from powermcp.powerio_handoff import prepare_balanced_file, prepare_balanced_json
+from powermcp.solver_case import resolve_solver_case
 from powermcp.sandbox import PathNotAllowed, checked_path, checked_read_tree
 
 # Storage directory resolved lazily (no filesystem writes at import time)
@@ -387,7 +387,7 @@ def get_system_info() -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# PowerIO handoff: prepare one balanced state, then stage MATPOWER text for
+# PowerIO interchange: resolve one balanced state, then stage MATPOWER text for
 # ANDES to load natively through run_power_flow.
 # ---------------------------------------------------------------------------
 
@@ -421,8 +421,8 @@ def load_network_from_json(
     except PathNotAllowed as exc:
         return {"status": "error", "message": str(exc)}
     try:
-        prepared = prepare_balanced_json(
-            network_json,
+        prepared = resolve_solver_case(
+            network_json=network_json,
             operating_point=operating_point,
             study_commit=study_commit,
         )
@@ -482,9 +482,9 @@ def load_network_from_any(
     except PathNotAllowed as exc:
         return {"status": "error", "message": str(exc)}
     try:
-        prepared = prepare_balanced_file(
-            file_path,
-            source_format,
+        prepared = resolve_solver_case(
+            file_path=file_path,
+            source_format=source_format,
             operating_point=operating_point,
             study_commit=study_commit,
         )

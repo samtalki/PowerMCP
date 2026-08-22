@@ -7,7 +7,7 @@ from pypsa import Network
 import numpy as np
 import pandas as pd
 from typing import Dict, List, Optional, Union, Any
-from powermcp.powerio_handoff import prepare_balanced_file, prepare_balanced_json
+from powermcp.solver_case import resolve_solver_case
 from powermcp.sandbox import (
     PathNotAllowed,
     checked_path,
@@ -562,8 +562,17 @@ def optimize_investment(
         }
 
 @mcp.tool()
-def import_from_csv_folder(folder_path: str, output_path: str) -> Dict[str, Any]:
-    """Import a CSV network and save it to an explicit NetCDF path."""
+def import_from_csv_folder(
+    folder_path: str, output_path: Optional[str] = None
+) -> Dict[str, Any]:
+    """Import a CSV network and save it to NetCDF.
+
+    ``output_path`` is explicit for new callers. Omitting it keeps the original
+    API behavior and writes ``<folder name>.nc`` in the working directory. The
+    resolved destination always passes through the shared path policy.
+    """
+    if output_path is None:
+        output_path = os.path.basename(os.path.normpath(folder_path)) + ".nc"
     try:
         folder_path = checked_read_tree(folder_path, purpose="folder_path")
     except PathNotAllowed as exc:
@@ -616,7 +625,7 @@ def export_to_csv_folder(network_name: str, folder_path: str) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# PowerIO handoff: prepare one balanced state, use PowerIO's native PyPSA CSV
+# PowerIO interchange: resolve one balanced state, use PowerIO's native PyPSA CSV
 # writer, then save the PyPSA network to the NetCDF path used by other tools.
 # ---------------------------------------------------------------------------
 
@@ -696,9 +705,9 @@ def import_case_from_any(
     except PathNotAllowed as exc:
         return {"status": "error", "message": str(exc)}
     try:
-        prepared = prepare_balanced_file(
-            file_path,
-            source_format,
+        prepared = resolve_solver_case(
+            file_path=file_path,
+            source_format=source_format,
             operating_point=operating_point,
             study_commit=study_commit,
         )
@@ -755,8 +764,8 @@ def import_case_from_json(
     except PathNotAllowed as exc:
         return {"status": "error", "message": str(exc)}
     try:
-        prepared = prepare_balanced_json(
-            network_json,
+        prepared = resolve_solver_case(
+            network_json=network_json,
             operating_point=operating_point,
             study_commit=study_commit,
         )

@@ -2,7 +2,7 @@ from typing import Dict, List, Optional, Tuple, Any, Union
 import pandapower as pp
 from mcp.server.mcpserver import MCPServer as FastMCP
 import logging
-from powermcp.powerio_handoff import prepare_balanced_file, prepare_balanced_json
+from powermcp.solver_case import resolve_solver_case
 from powermcp.sandbox import PathNotAllowed, checked_path
 
 
@@ -260,7 +260,7 @@ def get_network_info() -> Dict[str, Any]:
         }
 
 # ---------------------------------------------------------------------------
-# PowerIO handoff: prepare one balanced state and use PowerIO's native
+# PowerIO interchange: resolve one balanced state and use PowerIO's native
 # pandapower writer. Export still round-trips pandapower's PYPOWER tables
 # through PowerIO because pandapower has no corresponding native writer.
 # ---------------------------------------------------------------------------
@@ -268,7 +268,7 @@ def get_network_info() -> Dict[str, Any]:
 _POWERIO_HINT = "powerio not installed: pip install 'powerio[mcp,matrix]'"
 
 def _powerio_to_net(case):
-    """Use PowerIO's native pandapower writer for the solver handoff."""
+    """Use PowerIO's native writer to create the pandapower network."""
     conversion = case.to_format("pandapower-json")
     return pp.from_json_string(conversion.text), list(conversion.warnings)
 
@@ -348,9 +348,9 @@ def load_network_from_any(
     logger.info(f"Loading network via powerio from: {file_path}")
     global _current_net
     try:
-        prepared = prepare_balanced_file(
-            file_path,
-            source_format,
+        prepared = resolve_solver_case(
+            file_path=file_path,
+            source_format=source_format,
             operating_point=operating_point,
             study_commit=study_commit,
         )
@@ -392,8 +392,8 @@ def load_network_from_json(
     logger.info("Loading network from powerio JSON transport")
     global _current_net
     try:
-        prepared = prepare_balanced_json(
-            network_json,
+        prepared = resolve_solver_case(
+            network_json=network_json,
             operating_point=operating_point,
             study_commit=study_commit,
         )

@@ -170,7 +170,7 @@ load_network_from_json(network_json=pkg, study_commit=1)  # pandapower
 ```
 
 The same `operating_point` and `study_commit` selectors are available on the
-PowerIO handoff tools for pandapower, PyPSA, ANDES, and Egret. PowerMCP rejects
+PowerIO import tools for pandapower, PyPSA, ANDES, and Egret. PowerMCP rejects
 an unselected multi-state package instead of silently solving its base model.
 Study materialization honors the package's `base_operating_point`. Balanced
 solvers also reject multiconductor packages until the caller explicitly lowers

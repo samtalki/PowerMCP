@@ -19,9 +19,9 @@ pip install powermcp
 ```
 
 The base install includes **pandapower**, **PyPSA**, and the canonical **PowerIO**
-conversion server. PowerIO `.pio.json` packages can be handed directly to the
-solver bridges, with explicit operating-point or study-commit selection when a
-package contains multiple states. Everything else is opt-in via an extra:
+conversion server. PowerIO `.pio.json` packages can be passed directly to the
+solver import tools, with explicit operating-point or study-commit selection
+when a package contains multiple states. Everything else is opt-in via an extra:
 
 ```bash
 pip install "powermcp[psse]"            # one tool

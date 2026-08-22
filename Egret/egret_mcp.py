@@ -10,7 +10,7 @@ import io
 import logging
 from contextlib import redirect_stdout, redirect_stderr
 import numpy as np
-from powermcp.powerio_handoff import prepare_balanced_file, prepare_balanced_json
+from powermcp.solver_case import resolve_solver_case
 from powermcp.sandbox import PathNotAllowed, checked_path
 
 # Configure logging to be less verbose
@@ -196,7 +196,7 @@ def solve_dc_opf(
         }
 
 # ---------------------------------------------------------------------------
-# PowerIO handoff: prepare one balanced state, convert it to Egret JSON, and
+# PowerIO interchange: resolve one balanced state, convert it to Egret JSON, and
 # stage the file consumed by the solver tools above.
 # ---------------------------------------------------------------------------
 
@@ -281,9 +281,9 @@ def load_model_from_any(
     except PathNotAllowed as exc:
         return {"status": "error", "message": str(exc)}
     try:
-        prepared = prepare_balanced_file(
-            file_path,
-            source_format,
+        prepared = resolve_solver_case(
+            file_path=file_path,
+            source_format=source_format,
             operating_point=operating_point,
             study_commit=study_commit,
         )
@@ -327,8 +327,8 @@ def load_model_from_json(
         and powerio's fidelity warnings
     """
     try:
-        prepared = prepare_balanced_json(
-            network_json,
+        prepared = resolve_solver_case(
+            network_json=network_json,
             operating_point=operating_point,
             study_commit=study_commit,
         )
