@@ -53,7 +53,21 @@ del _bt
 
 # ── MCP server ────────────────────────────────────────────────────────────────
 from mcp.server.mcpserver import MCPServer as FastMCP
-from powermcp.sandbox import checked_path, checked_read_tree
+
+_repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_repo_root_added = _repo_root not in sys.path
+if _repo_root_added:
+    sys.path.insert(0, _repo_root)
+try:
+    from powermcp.sandbox import (
+        checked_path,
+        checked_read_tree,
+        ensure_checked_directory,
+    )
+finally:
+    if _repo_root_added:
+        sys.path.remove(_repo_root)
+del _repo_root, _repo_root_added
 
 mcp = FastMCP(
     name="DIgSILENT PowerFactory Control",
@@ -67,20 +81,8 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 
 
 def _ensure_checked_directory(path: str, purpose: str) -> str:
-    """Create a generated directory after checking each missing component."""
-    from pathlib import Path
-
-    target = Path(path).expanduser()
-    missing = []
-    current = target
-    while not current.exists():
-        missing.append(current)
-        current = current.parent
-    checked_path(str(current), purpose=purpose)
-    for item in reversed(missing):
-        item = Path(checked_path(str(item), purpose=purpose, for_write=True))
-        item.mkdir()
-    return checked_path(str(target), purpose=purpose, for_write=True)
+    """Compatibility wrapper for the shared generated-directory helper."""
+    return ensure_checked_directory(path, purpose=purpose)
 
 
 def _default_cfg_path():

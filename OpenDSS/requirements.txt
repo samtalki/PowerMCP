@@ -1,2 +1,3 @@
 py_dss_toolkit
-mcp
+mcp>=2,<3
+powerio[mcp,matrix]>=0.9.0,<1

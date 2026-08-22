@@ -22,7 +22,17 @@ from datetime import datetime
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from powermcp.sandbox import checked_path
+
+_repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_repo_root_added = _repo_root not in sys.path
+if _repo_root_added:
+    sys.path.insert(0, _repo_root)
+try:
+    from powermcp.sandbox import checked_path, ensure_checked_directory
+finally:
+    if _repo_root_added:
+        sys.path.remove(_repo_root)
+del _repo_root, _repo_root_added
 
 # ── PowerFactory Python path ──────────────────────────────────────
 # The bundled vendor `powerfactory` module lives next to the PowerFactory
@@ -170,19 +180,7 @@ def _safe_path_label(value: str, default: str = "run") -> str:
 
 
 def _ensure_output_directory(path: str, purpose: str) -> str:
-    from pathlib import Path
-
-    target = Path(path).expanduser()
-    missing = []
-    current = target
-    while not current.exists():
-        missing.append(current)
-        current = current.parent
-    checked_path(str(current), purpose=purpose)
-    for item in reversed(missing):
-        item = Path(checked_path(str(item), purpose=purpose, for_write=True))
-        item.mkdir()
-    return checked_path(str(target), purpose=purpose, for_write=True)
+    return ensure_checked_directory(path, purpose=purpose)
 
 
 # ══════════════════════════════════════════════════════════════════

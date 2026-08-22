@@ -3,7 +3,7 @@ import os
 from mcp.server.mcpserver import MCPServer as FastMCP
 from pscad_mcp.core.connection_manager import pscad_manager
 from pscad_mcp.core.executor import robust_executor
-from powermcp.sandbox import checked_path
+from pscad_mcp.utils.sandbox import checked_path
 
 async def load_projects(filenames: List[str]) -> str:
     """Load projects or workspace into PSCAD."""

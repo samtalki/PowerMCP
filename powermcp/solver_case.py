@@ -15,6 +15,8 @@ from typing import Any
 
 import powerio
 
+from powermcp.sandbox import checked_path, checked_read_tree
+
 _PACKAGE_FORMATS = frozenset(
     {"package", "pio", "pio-json", "pio_json", "pio-package", "pio_package"}
 )
@@ -87,7 +89,34 @@ def _study_commit_indexes(study: Any) -> list[int]:
     return list(range(len(study["commits"])))
 
 
+def _available_indexes(indexes: list[int]) -> str:
+    """Describe state choices without flooding an MCP error response."""
+    if len(indexes) <= 20:
+        return str(indexes)
+    if all(
+        index == indexes[0] + offset for offset, index in enumerate(indexes)
+    ):
+        return f"{indexes[0]}..{indexes[-1]} ({len(indexes)} available)"
+    preview = ", ".join(str(index) for index in indexes[:10])
+    return f"[{preview}, ...] ({len(indexes)} available; last {indexes[-1]})"
+
+
+def _index_inventory(indexes: list[int]) -> dict[str, Any]:
+    inventory: dict[str, Any] = {
+        "count": len(indexes),
+        "first": indexes[0],
+        "last": indexes[-1],
+    }
+    if len(indexes) <= 20:
+        inventory["indexes"] = indexes
+    return inventory
+
+
 def _validated(package: powerio.Package) -> dict[str, Any]:
+    # A serialized package carries the validation summary from the time it was
+    # written. Recompute it after deserialization so a modified model cannot
+    # keep a stale ``status: ok`` and cross the solver boundary unchecked.
+    package.validate()
     validation = package.validation()
     if validation.get("status") in ("error", "fatal"):
         raise ValueError(
@@ -126,25 +155,25 @@ def _resolve_package(
     commit_indexes = _study_commit_indexes(study)
     selection: dict[str, Any] | None = None
     if operating_point is not None:
-        if points is None:
+        if not point_indexes:
             raise ValueError("the .pio.json package has no operating points")
         package = package.materialize_operating_point(operating_point)
         selection = {"kind": "operating_point", "index": operating_point}
     elif study_commit is not None:
-        if study is None:
+        if not commit_indexes:
             raise ValueError("the .pio.json package has no study commits")
         package = package.materialize_study_commit(study_commit)
         selection = {"kind": "study_commit", "index": study_commit}
         if isinstance(study, dict) and study.get("base_operating_point") is not None:
             selection["base_operating_point"] = study["base_operating_point"]
-    elif points is not None or study is not None:
+    elif point_indexes or commit_indexes:
         choices = []
-        if points is not None:
-            choices.append(f"operating_point from {point_indexes}")
-        if study is not None:
-            choices.append(f"study_commit from {commit_indexes}")
+        if point_indexes:
+            choices.append(f"operating_point from {_available_indexes(point_indexes)}")
+        if commit_indexes:
+            choices.append(f"study_commit from {_available_indexes(commit_indexes)}")
         raise ValueError(
-            "the .pio.json package contains multiple solver states; select "
+            "the .pio.json package contains stored solver state data; select "
             + " or ".join(choices)
         )
 
@@ -166,9 +195,9 @@ def _resolve_package(
         if original_document.get("package_id") is not None:
             package_context["package_id"] = original_document["package_id"]
         if point_indexes:
-            package_context["operating_points"] = point_indexes
+            package_context["operating_points"] = _index_inventory(point_indexes)
         if commit_indexes:
-            package_context["study_commits"] = commit_indexes
+            package_context["study_commits"] = _index_inventory(commit_indexes)
         if selection is not None:
             package_context["materialized"] = selection
 
@@ -203,7 +232,14 @@ def resolve_solver_case(
     original_document: dict[str, Any] | None = None
     input_warnings: tuple[str, ...] = ()
     if file_path is not None:
+        # A directory format (for example PyPSA CSV) can contain many files.
+        # Checking only the directory itself would still permit a descendant
+        # symlink to escape the operator's configured MCP roots.
+        file_path = checked_path(file_path, purpose="file_path")
         candidate = Path(file_path)
+        if candidate.is_dir():
+            file_path = checked_read_tree(file_path, purpose="file_path")
+            candidate = Path(file_path)
         explicit_package = _format_token(source_format) in _PACKAGE_FORMATS
         if explicit_package or candidate.suffix.lower() == ".json":
             try:

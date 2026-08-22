@@ -1,19 +1,29 @@
 import sys
 import os
+import inspect
 import tempfile
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from mcp.server.mcpserver import MCPServer as FastMCP
 from pypsa import Network
 import numpy as np
 import pandas as pd
 from typing import Dict, List, Optional, Union, Any
-from powermcp.solver_case import resolve_solver_case
-from powermcp.sandbox import (
-    PathNotAllowed,
-    checked_path,
-    checked_read_tree,
-    staged_directory_write,
-)
+
+_repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_repo_root_added = _repo_root not in sys.path
+if _repo_root_added:
+    sys.path.insert(0, _repo_root)
+try:
+    from powermcp.solver_case import resolve_solver_case
+    from powermcp.sandbox import (
+        PathNotAllowed,
+        checked_path,
+        checked_read_tree,
+        staged_directory_write,
+    )
+finally:
+    if _repo_root_added:
+        sys.path.remove(_repo_root)
+del _repo_root, _repo_root_added
 
 
 def _to_serializable(obj: Any) -> Any:
@@ -40,6 +50,19 @@ mcp = FastMCP("PyPSA-MCP")
 def _checked_network_source(value: str, *, purpose: str) -> str:
     """Preflight a NetCDF file or every descendant of a CSV directory."""
     return checked_read_tree(value, purpose=purpose)
+
+
+def _optimize(network: Network, **kwargs):
+    """Call the modern optimizer with stable semantics across supported PyPSA.
+
+    ``include_objective_constant`` is not present throughout the supported
+    pre-2 range, and PyPSA plans to change its default in 2.0. Pass today's
+    behavior explicitly whenever the installed accessor supports it.
+    """
+    parameters = inspect.signature(network.optimize.__call__).parameters
+    if "include_objective_constant" in parameters:
+        kwargs["include_objective_constant"] = True
+    return network.optimize(**kwargs)
 
 
 # ============= Network Information =============
@@ -310,9 +333,10 @@ def create_network(
     crs: str = "EPSG:4326"
 ) -> Dict[str, Any]:
     """Create a new PyPSA network"""
-    if snapshots:
-        snapshots = pd.DatetimeIndex(snapshots)
-    network = Network(name=name, snapshots=snapshots, crs=crs)
+    network_kwargs: Dict[str, Any] = {"name": name, "crs": crs}
+    if snapshots is not None:
+        network_kwargs["snapshots"] = pd.DatetimeIndex(snapshots)
+    network = Network(**network_kwargs)
     output_path = checked_path(
         f"{name}.nc", purpose="generated network path", for_write=True
     )
@@ -459,20 +483,55 @@ def optimize_network(
     pyomo: bool = False,
     solver_options: Optional[Dict] = None
 ) -> Dict[str, Any]:
-    """Run a linear optimal power flow (LOPF) on the network"""
+    """Run a linear optimal power flow on the network.
+
+    Modern PyPSA uses its Linopy-backed ``Network.optimize`` accessor.  The
+    legacy ``formulation`` and ``pyomo`` arguments remain in the MCP schema so
+    existing clients do not break, but only PyPSA's current Kirchhoff/Linopy
+    path is available.
+    """
     network_name = _checked_network_source(network_name, purpose="network_name")
+    if formulation != "kirchhoff":
+        return {
+            "status": "error",
+            "message": (
+                "Modern PyPSA supports the 'kirchhoff' formulation through "
+                "Network.optimize; other legacy LOPF formulations are unavailable."
+            ),
+        }
+    if pyomo:
+        return {
+            "status": "error",
+            "message": (
+                "Modern PyPSA no longer provides the legacy Pyomo LOPF backend; "
+                "use the default Linopy optimizer (pyomo=false)."
+            ),
+        }
+
     network = Network(network_name)
-    
+
     try:
-        status = network.lopf(
-                    solver_name=solver_name,
-                    pyomo=pyomo,
-                    solver_options=solver_options or {}
-                )
+        status, termination_condition = _optimize(
+            network,
+            solver_name=solver_name,
+            solver_options=solver_options or {},
+        )
+
+        if status != "ok":
+            return {
+                "status": status,
+                "termination_condition": termination_condition,
+                "solver": solver_name,
+                "message": (
+                    "Optimization did not complete successfully: "
+                    f"{termination_condition}"
+                ),
+            }
         
         # Get optimization results
         results = {
             "status": status,
+            "termination_condition": termination_condition,
             "objective": float(network.objective),
             "solver": solver_name,
             "generators": {
@@ -522,13 +581,28 @@ def optimize_investment(
                 network.generators.carrier.isin(carriers), "p_nom_extendable"
             ] = True
         
-        status = network.lopf(
-                    solver_name=solver_name
-                )
+        status, termination_condition = _optimize(
+            network,
+            solver_name=solver_name,
+            multi_investment_periods=multi_investment_periods,
+        )
+
+        if status != "ok":
+            return {
+                "status": status,
+                "termination_condition": termination_condition,
+                "solver": solver_name,
+                "message": (
+                    "Investment optimization did not complete successfully: "
+                    f"{termination_condition}"
+                ),
+            }
         
         # Extract investment results
         results = {
             "status": status,
+            "termination_condition": termination_condition,
+            "solver": solver_name,
             "objective": float(network.objective),
             "investments": {
                 "generators": {
@@ -637,6 +711,57 @@ def _import_case_to_netcdf(case, output_path: str, overwrite_zero_s_nom: Optiona
         network.import_from_csv_folder(staging)
     warnings = list(written.get("warnings", []))
 
+    # PowerIO 0.9 preserves source generator voltage targets in its native
+    # generators.csv extension column.  PyPSA imports that column but regulates
+    # voltage through Bus.v_mag_pu_set, so apply it explicitly before solving.
+    if "v_mag_pu_set" in network.generators:
+        generators = network.generators
+        regulated = generators.loc[
+            generators["control"].isin(("PV", "Slack"))
+            & generators["v_mag_pu_set"].notna()
+            & generators["bus"].isin(network.buses.index),
+            ["bus", "v_mag_pu_set"],
+        ].sort_index(kind="stable")
+        for bus, targets in regulated.groupby("bus", sort=True):
+            values = targets["v_mag_pu_set"].astype(float)
+            target = float(values.iloc[0])
+            network.buses.loc[bus, "v_mag_pu_set"] = target
+            if not np.allclose(values.to_numpy(), target):
+                warnings.append(
+                    f"multiple voltage targets regulate bus {bus}; "
+                    f"using {target} from the first generator"
+                )
+
+    # The 0.9 CSV writer emits generators in canonical source order.  Restore
+    # transition costs that PyPSA supports but the writer does not yet emit.
+    source_generators = list(case.generators)
+    if len(source_generators) == len(network.generators):
+        network.generators["start_up_cost"] = [
+            float((generator.get("cost") or {}).get("startup", 0.0))
+            for generator in source_generators
+        ]
+        network.generators["shut_down_cost"] = [
+            float((generator.get("cost") or {}).get("shutdown", 0.0))
+            for generator in source_generators
+        ]
+    else:
+        warnings.append(
+            "generator transition costs could not be restored because the "
+            "PowerIO and PyPSA generator counts differ"
+        )
+    constant_costs = sum(
+        1
+        for generator in source_generators
+        if (generator.get("cost") or {}).get("model") == 2
+        and (generator.get("cost") or {}).get("coeffs")
+        and float((generator.get("cost") or {})["coeffs"][-1]) != 0.0
+    )
+    if constant_costs:
+        warnings.append(
+            f"{constant_costs} generator constant polynomial cost term(s) "
+            "have no equivalent in the PyPSA generator objective and were dropped"
+        )
+
     zero_ratings = 0
     for table in (network.lines, network.transformers):
         if "s_nom" not in table:
@@ -678,8 +803,9 @@ def import_case_from_any(
     NetCDF file.
 
     Reads any balanced PowerIO format or a ``.pio.json`` package and writes a
-    PyPSA network to output_path. For a package with multiple states, select
-    exactly one operating_point or study_commit; PowerIO materializes it first.
+    PyPSA network to output_path. If the package contains stored state data,
+    select exactly one operating_point or study_commit; PowerIO materializes it
+    first.
     PowerIO's native PyPSA writer preserves supported costs and element status.
 
     Args:
@@ -737,12 +863,14 @@ def import_case_from_json(
     operating_point: Optional[int] = None,
     study_commit: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Import a powerio JSON transport string as a PyPSA network saved to a
-    NetCDF file.
+    """Import PowerIO model JSON or one selected ``.pio.json`` package state
+    as a PyPSA network saved to a NetCDF file.
 
     Accepts the `json` string returned by the powerio server's parse tool,
-    so a case parsed once there loads here without passing a file around or
-    re-parsing it. Expects source-valued tables (MW, degrees)
+    or a durable package emitted by its package tools. A package containing
+    stored state data requires exactly one operating-point or study-commit selector. A
+    case parsed once there loads here without passing a file around or
+    re-parsing it. Model JSON expects source-valued tables (MW, degrees)
     as parse emits them, not the per-unit normalize form. Writes the
     network to output_path (use a .nc extension); pass that path as
     network_name to the other tools. powerio is a core dependency, so this is

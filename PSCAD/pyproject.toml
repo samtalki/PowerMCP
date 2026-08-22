@@ -13,7 +13,8 @@ authors = [
     {name = "LL0pez20", email = "luansantos@poli.ufrj.br"}
 ]
 dependencies = [
-    "mcp",
+    "mcp>=2,<3",
+    "powerio[mcp,matrix]>=0.9.0,<1",
     "psutil"
 ]
 

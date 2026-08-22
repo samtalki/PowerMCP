@@ -126,7 +126,7 @@ These tools wrap commercial or locally-installed software, so PowerMCP stores th
 
 ### Case compilation between servers (PowerIO)
 
-PowerMCP runs the MCP server that [powerio](https://github.com/eigenergy/powerio) ships in its own wheel, as a **core dependency** (no extra needed) — `powermcp run powerio` is `python -m powerio.mcp`, so a powerio release that adds or renames a tool needs no change here. It parses transmission and distribution formats into canonical JSON transports, converts between target artifacts with fidelity warnings, and builds the sparse matrices solvers need (B', B'', Y_bus, PTDF, LODF, Laplacian, LACPF).
+PowerMCP runs the MCP server that [powerio](https://github.com/eigenergy/powerio) ships in its own wheel, as a **core dependency** (no extra needed) — `powermcp run powerio` is `python -m powerio.mcp`, so a powerio release that adds tools or changes their implementation needs no local server copy. It parses transmission and distribution formats into canonical JSON transports, converts between target artifacts with fidelity warnings, and builds the sparse matrices solvers need (B', B'', Y_bus, PTDF, LODF, Laplacian, LACPF).
 
 Its JSON transport is the exchange format between PowerMCP servers: parse a case once, pass the returned `json` string between tool calls, and save runtime artifacts only when a backend needs a file. Existing `json` transport workflows remain supported.
 
@@ -159,8 +159,9 @@ lifecycle. PowerMCP uses the package only at the solver boundary:
 # A static package loads directly.
 import_case_from_json(network_json=pkg, output_path="case9.nc")
 
-# A package with several states requires an explicit selection. PowerIO v0.9
-# materializes and validates the state before PowerMCP creates the solver model.
+# A package with one or more stored states requires an explicit selection.
+# PowerIO v0.9 materializes and validates the selected state before PowerMCP
+# creates the solver model.
 import_case_from_json(
     network_json=pkg,
     output_path="dispatch.nc",
@@ -171,7 +172,7 @@ load_network_from_json(network_json=pkg, study_commit=1)  # pandapower
 
 The same `operating_point` and `study_commit` selectors are available on the
 PowerIO import tools for pandapower, PyPSA, ANDES, and Egret. PowerMCP rejects
-an unselected multi-state package instead of silently solving its base model.
+unselected stored state data instead of silently solving the package's base model.
 Study materialization honors the package's `base_operating_point`. Balanced
 solvers also reject multiconductor packages until the caller explicitly lowers
 them with PowerIO, so a lossy distribution-to-transmission reduction is never
@@ -190,7 +191,7 @@ compile_opendss_file(dss_file="feeder.dss")
 
 PowerWorld `.pwd` display files decode separately via `display(path=...)`, which returns the diagram canvas and each substation's display coordinates. The display geometry is distinct from the `.pwb`/`.aux` case data.
 
-PowerIO MCP tools accept local paths and `file://` URIs. Nonlocal URI schemes are rejected. Set `POWERIO_MCP_ALLOWED_ROOTS` to an `os.pathsep` separated list of directories to constrain paths handled by the shared PowerIO sandbox. PyPSA preflights a NetCDF file or every descendant of a CSV directory before constructing a network, and its CSV import requires an explicit checked output path. PyPSA and surge install directory outputs from a private sibling staging directory. Generated run directories exposed by the bundled servers use the same path policy. Put `POWERMCP_HOME` under an allowed root if ANDES, Egret, or LTSpice should write run artifacts while containment is enabled. These are path preflight checks; another process can replace a checked entry before a backend opens it.
+PowerIO MCP tools accept local paths and `file://` URIs. Nonlocal URI schemes are rejected. Set `POWERIO_MCP_ALLOWED_ROOTS` to an `os.pathsep` separated list of directories to constrain paths handled by the shared PowerIO sandbox. PyPSA preflights a NetCDF file or every descendant of a CSV directory before constructing a network, and both explicit and legacy-derived CSV import destinations are checked before writing. PyPSA and surge install directory outputs from a private sibling staging directory. Generated run directories exposed by the bundled servers use the same path policy. Put `POWERMCP_HOME` under an allowed root if ANDES, Egret, or LTSpice should write run artifacts while containment is enabled. These are path preflight checks; another process can replace a checked entry before a backend opens it.
 
 ### Running from a clone (without installing)
 

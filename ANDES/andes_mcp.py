@@ -9,8 +9,23 @@ from pathlib import Path
 from contextlib import redirect_stdout, redirect_stderr
 from mcp.server.mcpserver import MCPServer as FastMCP
 from typing import Dict, Any, Optional
-from powermcp.solver_case import resolve_solver_case
-from powermcp.sandbox import PathNotAllowed, checked_path, checked_read_tree
+
+_repo_root = str(Path(__file__).resolve().parents[1])
+_repo_root_added = _repo_root not in sys.path
+if _repo_root_added:
+    sys.path.insert(0, _repo_root)
+try:
+    from powermcp.solver_case import resolve_solver_case
+    from powermcp.sandbox import (
+        PathNotAllowed,
+        checked_path,
+        checked_read_tree,
+        ensure_checked_directory,
+    )
+finally:
+    if _repo_root_added:
+        sys.path.remove(_repo_root)
+del _repo_root, _repo_root_added
 
 # Storage directory resolved lazily (no filesystem writes at import time)
 def _andes_runs_dir():
@@ -23,22 +38,8 @@ def _andes_runs_dir():
 
 
 def _ensure_andes_runs_dir() -> str:
-    output = Path(_andes_runs_dir())
-    missing = []
-    current = output
-    while not current.exists():
-        missing.append(current)
-        current = current.parent
-    checked_path(str(current), purpose="generated ANDES output root")
-    for path in reversed(missing):
-        path = Path(
-            checked_path(
-                str(path), purpose="generated ANDES output root", for_write=True
-            )
-        )
-        path.mkdir()
-    return checked_path(
-        str(output), purpose="generated ANDES output root", for_write=True
+    return ensure_checked_directory(
+        _andes_runs_dir(), purpose="generated ANDES output root"
     )
 
 

@@ -3,8 +3,18 @@ import os
 import pandas as pd
 import subprocess
 from mcp.server.mcpserver import MCPServer as FastMCP
-from powermcp.sandbox import PathNotAllowed, checked_path
 from typing import Dict, List, Optional, Tuple, Any, Union
+
+_repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_repo_root_added = _repo_root not in sys.path
+if _repo_root_added:
+    sys.path.insert(0, _repo_root)
+try:
+    from powermcp.sandbox import PathNotAllowed, checked_path
+finally:
+    if _repo_root_added:
+        sys.path.remove(_repo_root)
+del _repo_root, _repo_root_added
 
 # Initialize MCP server
 mcp = FastMCP("PSLF Positive Sequence Load Flow Program")

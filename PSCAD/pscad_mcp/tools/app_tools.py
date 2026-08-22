@@ -4,7 +4,7 @@ from mcp.server.mcpserver import MCPServer as FastMCP
 from pscad_mcp.core.connection_manager import pscad_manager
 from pscad_mcp.core.executor import robust_executor
 from pscad_mcp.utils.doc_manager import doc_manager
-from powermcp.sandbox import PathNotAllowed, checked_path, checked_read_tree
+from pscad_mcp.utils.sandbox import PathNotAllowed, checked_path, checked_read_tree
 
 async def get_local_pscad() -> str:
     """Attach to a running local PSCAD instance or launch a new one."""

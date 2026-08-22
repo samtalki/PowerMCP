@@ -10,8 +10,18 @@ import io
 import logging
 from contextlib import redirect_stdout, redirect_stderr
 import numpy as np
-from powermcp.solver_case import resolve_solver_case
-from powermcp.sandbox import PathNotAllowed, checked_path
+
+_repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_repo_root_added = _repo_root not in sys.path
+if _repo_root_added:
+    sys.path.insert(0, _repo_root)
+try:
+    from powermcp.solver_case import resolve_solver_case
+    from powermcp.sandbox import PathNotAllowed, checked_path, ensure_checked_directory
+finally:
+    if _repo_root_added:
+        sys.path.remove(_repo_root)
+del _repo_root, _repo_root_added
 
 # Configure logging to be less verbose
 logging.getLogger('egret').setLevel(logging.WARNING)
@@ -202,25 +212,11 @@ def solve_dc_opf(
 
 
 def _ensure_egret_runs_dir() -> str:
-    from pathlib import Path
     from powermcp.paths import runs_dir
 
-    output = Path(runs_dir("egret", create=False))
-    missing = []
-    current = output
-    while not current.exists():
-        missing.append(current)
-        current = current.parent
-    checked_path(str(current), purpose="generated Egret output root")
-    for path in reversed(missing):
-        path = Path(
-            checked_path(
-                str(path), purpose="generated Egret output root", for_write=True
-            )
-        )
-        path.mkdir()
-    return checked_path(
-        str(output), purpose="generated Egret output root", for_write=True
+    return ensure_checked_directory(
+        str(runs_dir("egret", create=False)),
+        purpose="generated Egret output root",
     )
 
 
@@ -259,8 +255,8 @@ def load_model_from_any(
 
     Reads any balanced PowerIO format or a ``.pio.json`` package, converts one
     selected state to Egret JSON, validates it as ModelData, and stages it. For
-    a package with multiple states, select operating_point or study_commit. Pass the returned
-    `case_file` path to solve_ac_opf, solve_dc_opf, or
+    a package containing stored state data, select operating_point or
+    study_commit. Pass the returned `case_file` path to solve_ac_opf, solve_dc_opf, or
     solve_unit_commitment_problem. powerio is a core dependency, so this is
     always available.
 

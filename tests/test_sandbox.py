@@ -25,6 +25,7 @@ from powermcp.sandbox import (
     allowed_roots,
     checked_path,
     checked_read_tree,
+    ensure_checked_directory,
     staged_directory_write,
 )
 
@@ -202,6 +203,36 @@ def test_a_file_uri_decodes(tmp_path, monkeypatch):
     case.write_text("")
     monkeypatch.setenv("POWERIO_MCP_ALLOWED_ROOTS", str(tmp_path))
     assert checked_path(case.as_uri(), purpose="file_path") == str(case)
+
+
+def test_generated_directory_checks_and_creates_each_component(tmp_path, monkeypatch):
+    root = tmp_path / "allowed"
+    root.mkdir()
+    target = root / "nested" / "results"
+    monkeypatch.setenv("POWERIO_MCP_ALLOWED_ROOTS", str(root))
+
+    assert ensure_checked_directory(str(target), purpose="output") == str(target)
+    assert target.is_dir()
+
+
+def test_generated_directory_stops_at_an_unavailable_anchor(monkeypatch):
+    class UnavailableAnchor:
+        parent = None
+
+        def __init__(self):
+            self.parent = self
+
+        def exists(self):
+            return False
+
+        def __str__(self):
+            return "Z:\\"
+
+    anchor = UnavailableAnchor()
+    monkeypatch.setattr(powermcp.sandbox, "decode_local_path", lambda *_a, **_k: anchor)
+
+    with pytest.raises(PathNotAllowed, match="filesystem anchor does not exist"):
+        ensure_checked_directory("Z:\\missing", purpose="output")
 
 
 def _checked_arguments(server: str) -> dict[str, set[str]]:

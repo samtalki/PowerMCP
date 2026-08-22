@@ -21,6 +21,8 @@ not the spelling.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from powerio.mcp.sandbox import (
     ALLOWED_ROOTS_ENV,
     LEGACY_ROOT_ENVS,
@@ -34,6 +36,54 @@ from powerio.mcp.sandbox import (
     staged_directory_write,
 )
 
+
+def ensure_checked_directory(value: str, *, purpose: str = "directory") -> str:
+    """Create a directory tree without bypassing MCP path containment.
+
+    ``checked_path(..., for_write=True)`` deliberately requires an existing
+    parent.  Generated run directories often have several missing parents, so
+    walk back to the first existing directory and create each component only
+    after checking it.  The explicit anchor guard matters on Windows: the
+    parent of an unavailable drive or UNC anchor is the anchor itself.
+    """
+    target = decode_local_path(value, purpose=purpose)
+    missing: list[Path] = []
+    current = target
+
+    while not current.exists():
+        parent = current.parent
+        if parent == current:
+            raise PathNotAllowed(
+                f"`{purpose}` cannot be created because its filesystem anchor "
+                f"does not exist: {current}"
+            )
+        missing.append(current)
+        current = parent
+
+    checked_path(str(current), purpose=purpose)
+    if not current.is_dir():
+        raise PathNotAllowed(f"`{purpose}` parent is not a directory: {current}")
+
+    for item in reversed(missing):
+        checked = Path(
+            checked_path(str(item), purpose=purpose, for_write=True)
+        )
+        try:
+            checked.mkdir()
+        except FileExistsError:
+            # A cooperating process may have created it after our exists()
+            # check.  Accept only a directory, never a file or dangling link.
+            if not checked.is_dir():
+                raise PathNotAllowed(
+                    f"`{purpose}` component is not a directory: {checked}"
+                )
+
+    result = checked_path(str(target), purpose=purpose, for_write=True)
+    if not Path(result).is_dir():
+        raise PathNotAllowed(f"`{purpose}` is not a directory: {result}")
+    return result
+
+
 __all__ = [
     "ALLOWED_ROOTS_ENV",
     "LEGACY_ROOT_ENVS",
@@ -44,5 +94,6 @@ __all__ = [
     "checked_path",
     "checked_read_tree",
     "decode_local_path",
+    "ensure_checked_directory",
     "staged_directory_write",
 ]

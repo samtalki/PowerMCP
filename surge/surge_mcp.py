@@ -17,11 +17,23 @@ Conventions (shared with peer PowerMCP tools):
 from __future__ import annotations
 
 import logging
+import sys
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import surge
 from mcp.server.mcpserver import MCPServer as FastMCP
-from powermcp.sandbox import PathNotAllowed, checked_path, staged_directory_write
+
+_repo_root = str(Path(__file__).resolve().parents[1])
+_repo_root_added = _repo_root not in sys.path
+if _repo_root_added:
+    sys.path.insert(0, _repo_root)
+try:
+    from powermcp.sandbox import PathNotAllowed, checked_path, staged_directory_write
+finally:
+    if _repo_root_added:
+        sys.path.remove(_repo_root)
+del _repo_root, _repo_root_added
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

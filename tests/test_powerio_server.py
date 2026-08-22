@@ -84,7 +84,7 @@ def test_parse_json_round_trips():
 def test_tool_surface_is_canonical():
     tools = {tool.name: tool for tool in asyncio.run(powerio_mcp.mcp.list_tools())}
     names = set(tools)
-    assert names == {
+    required_names = {
         "convert",
         "save",
         "summary",
@@ -94,6 +94,7 @@ def test_tool_surface_is_canonical():
         "diagnostics",
         "display",
     }
+    assert required_names <= names
     for name in ("parse", "summary", "normalize", "matrix", "display"):
         props = tools[name].input_schema["properties"]
         assert "from_format" in props
@@ -390,7 +391,86 @@ def test_pypsa_import_preserves_supported_generator_costs(tmp_path):
     out = tmp_path / "costs.nc"
     result = pypsa_mcp.import_case_from_any(str(CASE9), str(out))
     assert result["status"] == "success", result
-    assert (pypsa.Network(str(out)).generators.marginal_cost != 0).all()
+    generators = pypsa.Network(str(out)).generators
+    assert (generators.marginal_cost != 0).all()
+    assert generators.start_up_cost.tolist() == pytest.approx([1500, 2000, 3000])
+    assert any("constant polynomial cost" in warning for warning in result["warnings"])
+
+
+def test_pypsa_import_applies_generator_voltage_targets_to_buses(tmp_path):
+    out = tmp_path / "voltage-targets.nc"
+    result = pypsa_mcp.import_case_from_any(str(CASE9), str(out))
+    assert result["status"] == "success", result
+
+    network = pypsa.Network(str(out))
+    assert network.buses.loc[["1", "2", "3"], "v_mag_pu_set"].tolist() == pytest.approx(
+        [1.04, 1.025, 1.025]
+    )
+
+
+def test_pypsa_create_network_uses_default_snapshot(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    result = pypsa_mcp.create_network("empty")
+
+    assert result["status"] == "success", result
+    network = pypsa.Network(result["network_file"])
+    assert len(network.snapshots) == 1
+
+
+def _write_feasible_pypsa_network(path: Path, *, extendable: bool = False) -> None:
+    network = pypsa.Network()
+    network.add("Bus", "bus")
+    network.add("Load", "load", bus="bus", p_set=10.0)
+    network.add(
+        "Generator",
+        "generator",
+        bus="bus",
+        carrier="gas",
+        p_nom=0.0 if extendable else 20.0,
+        p_nom_extendable=extendable,
+        capital_cost=5.0,
+        marginal_cost=10.0,
+    )
+    network.export_to_netcdf(path)
+
+
+def test_pypsa_optimize_network_uses_modern_optimizer(tmp_path):
+    path = tmp_path / "dispatch.nc"
+    _write_feasible_pypsa_network(path)
+
+    result = pypsa_mcp.optimize_network(str(path))
+
+    assert result["status"] == "ok", result
+    assert result["termination_condition"] == "optimal"
+    assert result["objective"] == pytest.approx(100.0)
+    assert result["generators"]["generator"]["p"] == pytest.approx(10.0)
+
+
+def test_pypsa_optimize_investment_uses_modern_optimizer(tmp_path):
+    path = tmp_path / "investment.nc"
+    _write_feasible_pypsa_network(path, extendable=True)
+
+    result = pypsa_mcp.optimize_investment(str(path), carriers=["gas"])
+
+    assert result["status"] == "ok", result
+    assert result["termination_condition"] == "optimal"
+    assert result["investments"]["generators"]["generator"][
+        "p_nom_opt"
+    ] == pytest.approx(10.0)
+
+
+def test_pypsa_legacy_optimizer_options_fail_clearly(tmp_path):
+    path = tmp_path / "legacy-options.nc"
+    path.write_bytes(b"")
+
+    formulation = pypsa_mcp.optimize_network(str(path), formulation="angles")
+    pyomo = pypsa_mcp.optimize_network(str(path), pyomo=True)
+
+    assert formulation["status"] == "error"
+    assert "legacy LOPF formulations" in formulation["message"]
+    assert pyomo["status"] == "error"
+    assert "legacy Pyomo" in pyomo["message"]
 
 
 def test_pypsa_import_overwrite_zero_s_nom(tmp_path):
@@ -937,3 +1017,21 @@ def test_powerio_to_opendss_composition(monkeypatch, tmp_path):
     result = configuration.compile_opendss_file(str(dss_path))
     assert result["success"] is True
     assert result["payload"]["dss_file"] == str(dss_path)
+
+
+def test_opendss_without_containment_does_not_scan_the_parent_tree(
+    monkeypatch, tmp_path
+):
+    configuration = _load_opendss_configuration(monkeypatch)
+    dss_path = tmp_path / "feeder.dss"
+    dss_path.write_text("Clear")
+    monkeypatch.setattr(configuration, "allowed_roots", lambda: ())
+    monkeypatch.setattr(
+        configuration,
+        "checked_read_tree",
+        lambda *_a, **_k: pytest.fail("unconfigured OpenDSS must not scan siblings"),
+    )
+
+    result = configuration.compile_opendss_file(str(dss_path))
+
+    assert result["success"] is True

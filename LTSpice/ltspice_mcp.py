@@ -51,7 +51,16 @@ try:
 except ImportError:
     sys.exit("Error: PyLTSpice/spicelib not found. Please run 'pip install PyLTSpice'.")
 
-from powermcp.sandbox import PathNotAllowed, checked_path
+_repo_root = str(Path(__file__).resolve().parents[1])
+_repo_root_added = _repo_root not in sys.path
+if _repo_root_added:
+    sys.path.insert(0, _repo_root)
+try:
+    from powermcp.sandbox import PathNotAllowed, checked_path, ensure_checked_directory
+finally:
+    if _repo_root_added:
+        sys.path.remove(_repo_root)
+del _repo_root, _repo_root_added
 
 
 # =============================================================================
@@ -121,19 +130,7 @@ def _output_dir():
 
 def _ensure_output_dir() -> str:
     """Create the generated run root only after checking each new component."""
-    output = Path(_output_dir())
-    missing = []
-    current = output
-    while not current.exists():
-        missing.append(current)
-        current = current.parent
-    checked_path(str(current), purpose="generated output root")
-    for path in reversed(missing):
-        path_text = checked_path(
-            str(path), purpose="generated output root", for_write=True
-        )
-        Path(path_text).mkdir()
-    return checked_path(str(output), purpose="generated output root", for_write=True)
+    return ensure_checked_directory(_output_dir(), purpose="generated output root")
 
 
 def check_ltspice_executable():

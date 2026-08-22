@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import sys
 
+from packaging.version import Version
+
 from powermcp import doctor
 from powermcp.registry import get_tool
 
@@ -116,10 +118,16 @@ def test_the_floor_is_found_when_the_probe_is_not_the_distribution_name():
 
 def test_the_floor_is_found_without_top_level_distribution_metadata(monkeypatch):
     monkeypatch.setattr(doctor, "_distributions", lambda probe: [])
+    monkeypatch.setattr(
+        doctor,
+        "requires",
+        lambda _distribution: ("powerio[mcp,matrix]>=0.9.0,<1",),
+    )
     req = doctor._declared_requirement("powerio")
     assert req is not None
     assert doctor._canonical(req.name) == "powerio"
-    assert str(req.specifier) == ">=0.9.0"
+    assert Version("0.9.0") in req.specifier
+    assert Version("1.0.0") not in req.specifier
 
 
 def test_an_out_of_date_dependency_under_another_name_is_caught(monkeypatch):

@@ -5,8 +5,18 @@ import io
 from pathlib import Path
 
 from mcp.server.mcpserver import MCPServer as FastMCP
-from powermcp.sandbox import PathNotAllowed, checked_path
 from typing import Dict, List, Optional, Any
+
+_repo_root = str(Path(__file__).resolve().parents[1])
+_repo_root_added = _repo_root not in sys.path
+if _repo_root_added:
+    sys.path.insert(0, _repo_root)
+try:
+    from powermcp.sandbox import PathNotAllowed, checked_path
+finally:
+    if _repo_root_added:
+        sys.path.remove(_repo_root)
+del _repo_root, _repo_root_added
 
 # Initialize MCP server
 mcp = FastMCP("PSSE 35+ Positive Sequence Load Flow Program")

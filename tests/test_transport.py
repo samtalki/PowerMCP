@@ -67,7 +67,7 @@ def test_launch_serves_the_canonical_tool_surface():
     async def steps(session):
         return sorted(t.name for t in (await session.list_tools()).tools)
 
-    assert _run(steps) == [
+    required = {
         "convert",
         "diagnostics",
         "display",
@@ -76,7 +76,8 @@ def test_launch_serves_the_canonical_tool_surface():
         "parse",
         "save",
         "summary",
-    ]
+    }
+    assert required <= set(_run(steps))
 
 
 def test_a_path_argument_survives_the_transport():

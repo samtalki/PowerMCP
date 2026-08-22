@@ -89,8 +89,8 @@ def _launch_script(tool: Tool) -> None:
     # Emulate `python <script>`: only the script's own directory goes on sys.path
     # (runpy.run_path does not add it). We deliberately do NOT add the parent —
     # the parent holds dirs named exactly like libraries (pandapower/, surge/),
-    # and each server already does its own sys.path setup (PyPSA appends its
-    # parent; OpenDSS inserts its root for `from core.server import ...`).
+    # and each server temporarily exposes the repo root only while importing
+    # shared powermcp modules (OpenDSS also inserts its root for `core`).
     server_dir = str(script.parent)
     if server_dir not in sys.path:
         sys.path.insert(0, server_dir)

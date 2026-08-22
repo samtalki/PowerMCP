@@ -6,7 +6,7 @@ import logging
 from mcp.server.mcpserver import MCPServer as FastMCP
 from pscad_mcp.core.connection_manager import pscad_manager
 from pscad_mcp.core.executor import robust_executor
-from powermcp.sandbox import checked_path, checked_read_tree
+from pscad_mcp.utils.sandbox import checked_path, checked_read_tree
 
 logger = logging.getLogger("pscad-mcp.data")
 

@@ -1,9 +1,22 @@
 from typing import Dict, List, Optional, Tuple, Any, Union
+import sys
+from pathlib import Path
+
 import pandapower as pp
 from mcp.server.mcpserver import MCPServer as FastMCP
 import logging
-from powermcp.solver_case import resolve_solver_case
-from powermcp.sandbox import PathNotAllowed, checked_path
+
+_repo_root = str(Path(__file__).resolve().parents[1])
+_repo_root_added = _repo_root not in sys.path
+if _repo_root_added:
+    sys.path.insert(0, _repo_root)
+try:
+    from powermcp.solver_case import resolve_solver_case
+    from powermcp.sandbox import PathNotAllowed, checked_path
+finally:
+    if _repo_root_added:
+        sys.path.remove(_repo_root)
+del _repo_root, _repo_root_added
 
 
 # Configure logging
@@ -327,8 +340,9 @@ def load_network_from_any(
     """Load a network from any powerio readable case file.
 
     Reads any balanced PowerIO format or a ``.pio.json`` package and replaces
-    the current network. For a package with multiple states, select exactly one
-    operating_point or study_commit; PowerIO materializes it before conversion.
+    the current network. If the package contains stored state data, select
+    exactly one operating_point or study_commit; PowerIO materializes it before
+    conversion.
 
     Args:
         file_path: Path to the case file

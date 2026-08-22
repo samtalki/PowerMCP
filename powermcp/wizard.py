@@ -1,6 +1,6 @@
 """Interactive install wizard for `powermcp install`.
 
-Flow: select tools (pandapower + PyPSA pre-checked) → capture local software
+Flow: select tools (pandapower + PyPSA + PowerIO pre-checked) → capture local software
 paths for closed-source tools → pip-install the chosen extras → write the
 selected MCP client configs. Windows-only tools are hidden off Windows, and
 surge is hidden on Python versions it doesn't support.
@@ -187,7 +187,7 @@ def _interactive_select(client_names: list[str]) -> list[Tool]:
     if not _tty():
         console.print(
             "[yellow]No interactive terminal detected — defaulting to the core tools "
-            "(pandapower, PyPSA). Re-run with `--tools <ids>` or `--all` to choose more.[/]"
+            "(pandapower, PyPSA, PowerIO). Re-run with `--tools <ids>` or `--all` to choose more.[/]"
         )
         return [TOOLS[n] for n in CORE]
     import questionary
@@ -207,7 +207,7 @@ def _interactive_select(client_names: list[str]) -> list[Tool]:
         picked = questionary.checkbox(
             "Select power-system tools to install:",
             choices=choices,
-            instruction="(↑/↓ move · SPACE toggles a tool · ENTER confirms — pandapower & PyPSA are preselected)",
+            instruction="(↑/↓ move · SPACE toggles a tool · ENTER confirms — pandapower, PyPSA & PowerIO are preselected)",
         ).ask()
     except Exception as exc:
         console.print(

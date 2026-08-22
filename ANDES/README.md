@@ -39,6 +39,8 @@ Configure in your MCP client (e.g., Cursor, Claude Desktop):
 - **run_time_domain_simulation(step_size: float = 0.01, t_end: float = 10.0)**: Run time domain simulation on the currently loaded power system.
 - **run_eigenvalue_analysis(file_path: str)**: Run eigenvalue analysis on a power system case.
 - **get_system_info()**: Get information about the currently loaded power system.
+- **load_network_from_any(...)**: Convert any PowerIO-readable case or one selected `.pio.json` package state into the ANDES run format.
+- **load_network_from_json(...)**: Convert PowerIO model JSON or one selected `.pio.json` package state without staging the source input.
 
 ## Prompt Example
 

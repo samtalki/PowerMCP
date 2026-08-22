@@ -52,7 +52,7 @@ def _main(
 # --------------------------------------------------------------------------- #
 @app.command()
 def install(
-    yes: bool = typer.Option(False, "--yes", "-y", help="Non-interactive: install core only (pandapower + PyPSA)."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Non-interactive: install core only (pandapower + PyPSA + PowerIO)."),
     tools: str = typer.Option(
         None,
         "--tools",

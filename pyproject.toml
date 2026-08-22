@@ -32,7 +32,10 @@ classifiers = [
 # CLI/installer toolkit.
 dependencies = [
     "pandapower",
-    "pypsa>=0.25.0",
+    # 0.35.2 is the last Python 3.10-compatible modern optimizer line and the
+    # first floor we verify against today's dependency resolver. Python 3.11+
+    # naturally resolves to PyPSA 1.x; keep the next major opt-in.
+    "pypsa>=0.35.2,<2",
     "numpy>=1.24",
     # pandapower's PYPOWER converter does not support pandas 3 yet.
     "pandas>=2.0,<3",
@@ -46,7 +49,7 @@ dependencies = [
     # PowerMCP uses APIs introduced in powerio 0.9.0.
     # powerio ships the server itself (`python -m powerio.mcp`), so this repo
     # bundles no copy of it and `powermcp run powerio` runs powerio's.
-    "powerio[mcp,matrix]>=0.9.0",
+    "powerio[mcp,matrix]>=0.9.0,<1",
     # CLI / installer toolkit:
     # packaging: the doctor compares an installed version against the floor
     # declared right here, so it has to read a version specifier.

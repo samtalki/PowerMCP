@@ -8,6 +8,10 @@
       "command": "powermcp",
       "args": ["run", "pypsa"]
     },
+    "powermcp_powerio": {
+      "command": "powermcp",
+      "args": ["run", "powerio"]
+    },
     "powermcp_psse": {
       "command": "powermcp",
       "args": ["run", "psse"]

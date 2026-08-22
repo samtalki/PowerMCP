@@ -8,7 +8,7 @@ import importlib.util
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
-from powermcp.sandbox import checked_path
+from pscad_mcp.utils.sandbox import checked_path, ensure_checked_directory
 
 logger = logging.getLogger("pscad-mcp.doc_manager")
 
@@ -121,26 +121,8 @@ class DocumentationManager:
     @staticmethod
     def _ensure_directory(path: str) -> str:
         """Create a documentation output only after checking every component."""
-        target = Path(path).expanduser()
-        missing = []
-        current = target
-        while not current.exists():
-            missing.append(current)
-            current = current.parent
-        checked_path(str(current), purpose="generated PSCAD documentation root")
-        for item in reversed(missing):
-            item = Path(
-                checked_path(
-                    str(item),
-                    purpose="generated PSCAD documentation root",
-                    for_write=True,
-                )
-            )
-            item.mkdir()
-        return checked_path(
-            str(target),
-            purpose="generated PSCAD documentation root",
-            for_write=True,
+        return ensure_checked_directory(
+            path, purpose="generated PSCAD documentation root"
         )
 
     def _prepare_output_dirs(self) -> None:
