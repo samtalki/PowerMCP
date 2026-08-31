@@ -57,8 +57,8 @@ Configure in your MCP client (e.g., Cursor, Claude Desktop):
   - `success`: whether ANDES's `EIG.run()` reported success.
   - `n_eigenvalues`, `eigenvalues`: the pre-0.3.0 fields, retained so existing callers keep working. The old `eigenvectors` and `state_variables` fields are gone: they read attributes the `EIG` routine has never had, so they only ever returned `[]`.
 - **get_system_info()**: Get information about the currently loaded power system.
-- **load_network_from_any(...)**: Convert any PowerIO-readable case or one selected `.pio.json` package state into the ANDES run format.
-- **load_network_from_json(...)**: Convert PowerIO model JSON or one selected `.pio.json` package state without staging the source input.
+- **load_network_from_any(...)**: Convert a balanced case PowerIO can read, or a static `.pio.json` module, into the ANDES run format. The result includes structured `diagnostics` and, for stored input, `module` context.
+- **load_network_from_json(...)**: Convert PowerIO balanced model JSON or a static `.pio.json` module without staging the source input. Inspect collections with PowerIO `list_states` and pass an `export_state` result to this tool.
 
 ## License note
 

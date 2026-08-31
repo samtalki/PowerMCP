@@ -77,7 +77,7 @@ The base install includes the open-source engines that need no extra setup — *
 ```bash
 pip install powermcp[psse]              # add PSS/E support
 pip install powermcp[andes,opendss]     # add several tools at once
-pip install powermcp[opensource]        # all open-source tools (ANDES, Egret, OpenDSS, surge, HOPE, LTSpice, GenX)
+pip install powermcp[opensource]        # open source tools, including the Tellegen adapter
 pip install powermcp[all]               # everything (closed-source tools still need the local software)
 ```
 
@@ -108,9 +108,11 @@ Re-running `powermcp install` pre-checks the tools you've already installed or c
 | `powermcp doctor` | Check each tool's dependencies and configured paths |
 | `powermcp config show` / `config set <tool>.<key> <path>` | Inspect / set local software paths |
 
-### Closed-source / EXE-based tools
+### Tools configured with local software paths
 
-These tools wrap commercial or locally-installed software, so PowerMCP stores the local path in `~/.powermcp/config.toml` (captured by `powermcp install`, or set manually with `powermcp config set`):
+PowerMCP stores local executable and software paths in
+`~/.powermcp/config.toml`. The installer can capture them, or you can use
+`powermcp config set`.
 
 | Tool | Config keys | Example |
 |---|---|---|
@@ -120,6 +122,7 @@ These tools wrap commercial or locally-installed software, so PowerMCP stores th
 | LTSpice | `ltspice.exe` *(auto-detected)* | Found automatically in standard locations — usually no setup needed. Override: `powermcp config set ltspice.exe "C:\Program Files\ADI\LTspice\LTspice.exe"` |
 | HOPE | `hope.repo_root`, `hope.julia_bin` | `powermcp config set hope.repo_root "C:\src\HOPE"` |
 | GenX | `genx.repo_root` | `powermcp config set genx.repo_root "/home/me/GenX.jl"` — the GenX.jl checkout; `GENX_DIR` overrides it |
+| Tellegen | `tellegen.binary` | Build `tellegen-cli`, then run `powermcp config set tellegen.binary "/path/to/tellegen/target/release/tellegen"` |
 | PowerWorld | *(none)* | `esa` auto-discovers a running, licensed Simulator via COM; the `powerworld` extra also installs `numba` (required by esa) |
 | PSCAD | *(none)* | `pip install powermcp[pscad-windows]` provides `mhi-pscad`; PSCAD must be installed |
 
@@ -127,66 +130,88 @@ These tools wrap commercial or locally-installed software, so PowerMCP stores th
 
 ### Case compilation between servers (PowerIO)
 
-PowerMCP runs the MCP server that [powerio](https://github.com/eigenergy/powerio) ships in its own wheel, as a **core dependency** (no extra needed) — `powermcp run powerio` is `python -m powerio.mcp`, so a powerio release that adds tools or changes their implementation needs no local server copy. It parses transmission and distribution formats into canonical JSON transports, converts between target artifacts with fidelity warnings, and builds the sparse matrices solvers need (B', B'', Y_bus, PTDF, LODF, Laplacian, LACPF).
+PowerMCP registers and launches the MCP server shipped by
+[PowerIO](https://github.com/eigenergy/powerio). `powermcp run powerio` runs
+`python -m powerio.mcp`; this repository does not keep a second server or
+reimplement its case semantics. PowerIO owns interchange, conversion,
+inspection, validation, structured diagnostics, normalization, matrices,
+display artifacts, version metadata, collection operations, lowerings, and
+sparse solver inputs. PowerMCP owns solver adapters that consume one concrete
+static case.
 
-Its JSON transport is the exchange format between PowerMCP servers: parse a case once, pass the returned `json` string between tool calls, and save runtime artifacts only when a backend needs a file. Existing `json` transport workflows remain supported.
+The Python boundary retains the module until the target artifact is emitted:
 
-```
-parse(path="case9.raw")                            # powerio server -> {"json": ..., "summary": ...}
-load_network_from_json(network_json=...)           # pandapower server ingests the transport
-load_model_from_json(network_json=...)             # egret server stages it as a solvable case file
-import_case_from_json(network_json=..., output_path="case9.nc")  # PyPSA server writes a .nc for its tools
-matrix(kind="ptdf", json=...)                      # powerio server builds matrices from it
-save(to_format="psse", out_path="case9.raw", json=...)  # stage a file for path only servers
-```
-
-PowerIO also supports the `.pio.json` package transport, which carries the model plus package metadata and structured diagnostics:
-
-```
-parsed = parse(path="case9.raw", transport="package")
-pkg = parsed["package_json"]
-summary(package_json=pkg)
-matrix(kind="ptdf", package_json=pkg)
-save(to_format="psse", out_path="case9.raw", package_json=pkg)
-diagnostics(package_json=pkg)  # package diagnostics summary and structured findings
+```python
+module = powerio.parse_file("case9.raw")
+network = module.value
+diagnostics = module.diagnostics
+ptdf = network.calc_ptdf()
+module.emit("matpower", "case9.m")
 ```
 
-A package can also retain provenance and source maps, stable row identities,
-validation state, operating-point series, cumulative study commits, and
-lowering history. The canonical PowerIO MCP tools continue to own that package
-lifecycle. PowerMCP uses the package only at the solver boundary:
+The MCP boundary uses the stored `.pio.json` module transport. The canonical
+tools are `parse`, `inspect`, `diagnostics`, `summarize`, `to_normalized`,
+`calc_matrix`, `display`, `about`, `list_states`, `inspect_state`,
+`export_state`, `to_balanced_report`, `to_balanced`, and `emit`.
 
+```python
+parsed = parse(path="case9.raw", transport="module")
+module_json = parsed["module_json"]
+inspect(module_json=module_json)
+diagnostics(module_json=module_json)
+calc_matrix(kind="ptdf", module_json=module_json)
+emit(format="psse", destination="case9.raw", module_json=module_json)
 ```
-# A static package loads directly.
-import_case_from_json(network_json=pkg, output_path="case9.nc")
 
-# A package with one or more stored states requires an explicit selection.
-# PowerIO v0.9 materializes and validates the selected state before PowerMCP
-# creates the solver model.
+A collection must be inspected and exported through PowerIO before a solver
+adapter accepts it. PowerMCP does not duplicate collection selectors:
+
+```python
+states = list_states(module_json=module_json)
+inspect_state(module_json=module_json, scenario="base")
+selected = export_state(module_json=module_json, scenario="base")
 import_case_from_json(
-    network_json=pkg,
-    output_path="dispatch.nc",
-    operating_point=3,
+    network_json=selected["module_json"], output_path="dispatch.nc"
 )
-load_network_from_json(network_json=pkg, study_commit=1)  # pandapower
 ```
 
-The same `operating_point` and `study_commit` selectors are available on the
-PowerIO import tools for pandapower, PyPSA, ANDES, and Egret. PowerMCP rejects
-unselected stored state data instead of silently solving the package's base model.
-Study materialization honors the package's `base_operating_point`. Balanced
-solvers also reject multiconductor packages until the caller explicitly lowers
-them with PowerIO, so a lossy distribution-to-transmission reduction is never
-implicit. PyPSA and pandapower use PowerIO's native writers, preserving the
-supported cost and in-service metadata without PowerMCP rebuilding PYPOWER
-tables.
+The same rule applies to time series, using a `time_position` returned by
+`list_states`. Balanced solvers reject multiconductor modules until the caller
+checks `to_balanced_report` and explicitly calls `to_balanced`. PyPSA and
+pandapower emit through PowerIO's native writers so source maps, diagnostics,
+history, supported costs, and in service metadata remain attached to the
+interchange boundary.
 
-`summary` returns the canonical nested shape used by PowerIO and PowerMCP: counts live under `elements` (`elements.buses`, `elements.branches`, `elements.generators`) and topology metadata lives under `topology` (`topology.connected_components`, `topology.reference_buses`).
+Model JSON remains available for direct static network exchange. Use module
+transport when provenance, source ownership, diagnostics, validation, or
+history must survive between calls.
 
-`save` covers the servers without a bridge: write the converted case to disk and point their load tools at the file. For OpenDSS, save a distribution transport as DSS, then compile that DSS file:
+### DC OPF and capacity planning (Tellegen)
 
-```
-save(to_format="dss", out_path="feeder.dss", json=..., json_format="bmopf-json")
+Install the adapter with `pip install "powermcp[tellegen]"`, build
+`tellegen-cli`, and configure `tellegen.binary`. The server exposes three
+tools:
+
+- `capabilities` returns Tellegen's formulation and differentiation records.
+- `solve_dc_opf` accepts a stored PowerIO module and returns the
+  `dc_opf_solution` module in `results`.
+- `plan_capacity` accepts the planning request defined by Tellegen's contract
+  and returns its `CapacityPlanOutcome` and exact solution module in `results`.
+
+Capacity planning uses implicit gradients to choose capacity increase trials
+and exact DC OPF solves to accept a bounded proposal. The search is heuristic
+and does not change the input module. PowerMCP checks the configured CLI against
+the bundled `tellegen.cli/1` contract before each operation.
+
+For OpenDSS, emit a distribution transport as DSS, then compile that file:
+
+```python
+emit(
+    format="dss",
+    destination="feeder.dss",
+    json=distribution_json,
+    json_format="bmopf-json",
+)
 compile_opendss_file(dss_file="feeder.dss")
 ```
 
@@ -202,6 +227,7 @@ Every bundled server is still a standalone script. Clone the repo and run any se
 python pandapower/panda_mcp.py
 python PSSE/psse_mcp.py          # uses ~/.powermcp/config.toml if present, else legacy default paths
 python -m powerio.mcp            # powerio ships its own server; the clone holds no copy
+python tellegen/tellegen_mcp.py  # needs POWERMCP_TELLEGEN_BINARY when run directly
 ```
 
 ### Testing with your LLMs

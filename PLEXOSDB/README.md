@@ -56,9 +56,8 @@ python -c "from plexosdb_mcp.server import build_mcp_server; print(build_mcp_ser
 ### Why `powermcp run plexosdb` launches this as a script, not a module
 
 `PLEXOSDB/plexosdb_mcp/main.py` deliberately lives in a package also named
-`plexosdb_mcp` — the same import name as the upstream distribution it re-exports
-(mirroring `powerio/powerio_mcp.py`'s re-export of the `powerio` package). Because of
-that shared name, the registry launches it as a **script** (`entry_rel=
+`plexosdb_mcp` — the same import name as the upstream distribution it re-exports.
+Because of that shared name, the registry launches it as a **script** (`entry_rel=
 "plexosdb_mcp/main.py"`), not as a module. Module-style launch would add `PLEXOSDB/`
 itself to `sys.path`, and `import plexosdb_mcp` inside `main.py` would then resolve to
 *this* package before ever reaching the real, installed one — confirmed by direct

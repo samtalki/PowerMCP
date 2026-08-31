@@ -54,9 +54,11 @@ Configure in your MCP client (e.g., Cursor, Claude Desktop):
 - [x] `optimize_investment` - Run capacity expansion optimization
 - [x] `import_from_csv_folder` - Import network from CSV files
 - [x] `export_to_csv_folder` - Export network to CSV format
-- [x] `import_case_from_any` - Import any PowerIO-readable case or one selected `.pio.json` package state to NetCDF
-- [x] `import_case_from_json` - Import PowerIO model JSON or one selected `.pio.json` package state to NetCDF
+- [x] `import_case_from_any` - Import any balanced PowerIO case or stored static `.pio.json` module to NetCDF
+- [x] `import_case_from_json` - Import PowerIO model JSON or a stored static `.pio.json` module to NetCDF
 - [x] `run_contingency_analysis` - N-1 contingency analysis
+
+Collection modules must be exported to a static module through PowerIO before importing. Interchange tools return structured `diagnostics`; stored module context is returned under `module`.
 
 # Future functionalities
 - [ ] `calculate_statistics` - Calculate capacity factors, line loading, and curtailment

@@ -19,9 +19,10 @@ pip install powermcp
 ```
 
 The base install includes **pandapower**, **PyPSA**, and the canonical **PowerIO**
-conversion server. PowerIO `.pio.json` packages can be passed directly to the
-solver import tools, with explicit operating-point or study-commit selection
-when a package contains stored state data. Everything else is opt-in via an extra:
+conversion server. Static PowerIO `.pio.json` modules can be passed directly to
+the solver import tools. Collections must first be discovered with PowerIO
+`list_states` and materialized with `export_state`. Everything else is opt-in
+via an extra:
 
 ```bash
 pip install "powermcp[psse]"            # one tool
@@ -44,6 +45,7 @@ pip install "powermcp[all]"             # everything
 | `surge` | surge | **Python 3.12–3.14 only** |
 | `hope` | HOPE | + needs Julia at runtime |
 | `genx` | GenX | + needs a GenX.jl checkout; case submission needs SLURM `sbatch` |
+| `tellegen` | Tellegen | build `tellegen-cli` and configure `tellegen.binary` |
 | `ltspice` | LTSpice | executable **auto-detected** (override with `ltspice.exe`) |
 | `powerworld` | PowerWorld | needs licensed Simulator (COM); extra also installs `numba` (required by esa 1.3.5) |
 | `psse`, `pslf`, `powerfactory` | PSS/E, PSLF, PowerFactory | engine loaded from a configured local path |
@@ -101,7 +103,7 @@ powermcp config set <tool>.<key> <path>  # set one path
 powermcp --version
 ```
 
-### Closed-source tool paths
+### Local tool paths
 
 These are stored in `~/.powermcp/config.toml` (captured by the wizard, or set manually):
 
@@ -112,6 +114,7 @@ powermcp config set ltspice.exe     "C:\Program Files\ADI\LTspice\LTspice.exe"
 powermcp config set pslf.python_lib "C:\Program Files\GE PSLF\PSLF_PYTHON"
 powermcp config set powerfactory.python_path "...\DIgSILENT\PowerFactory 2024\Python\3.11"
 powermcp config set hope.repo_root  "C:\src\HOPE"
+powermcp config set tellegen.binary "/path/to/tellegen/target/release/tellegen"
 ```
 
 Resolution order for each key is **environment variable** (`POWERMCP_PSSE_BIN`, …) →
@@ -229,6 +232,7 @@ for Claude Desktop without `pip install`:
 ```bash
 python pandapower/panda_mcp.py
 python PSSE/psse_mcp.py     # uses ~/.powermcp/config.toml if present, else legacy paths
+python tellegen/tellegen_mcp.py  # needs POWERMCP_TELLEGEN_BINARY
 ```
 
 ---

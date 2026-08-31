@@ -37,8 +37,8 @@ Configure in your MCP client (e.g., Cursor, Claude Desktop):
 - **solve_unit_commitment_problem(case_file, solver, mipgap, timelimit)**: Solve a unit commitment problem with custom solver, MIP gap, and time limits.
 - **solve_ac_opf(case_file, solver, return_results)**: Run AC Optimal Power Flow on Matpower or Egret JSON case files.
 - **solve_dc_opf(case_file, solver, return_results)**: Run DC Optimal Power Flow on Matpower or Egret JSON case files.
-- **load_model_from_any(...)**: Convert any PowerIO-readable case or one selected `.pio.json` package state into an Egret model.
-- **load_model_from_json(...)**: Convert PowerIO model JSON or one selected `.pio.json` package state without staging the source input.
+- **load_model_from_any(...)**: Convert a balanced case PowerIO can read, or a static `.pio.json` module, into an Egret model. The result includes structured `diagnostics` and, for stored input, `module` context.
+- **load_model_from_json(...)**: Convert PowerIO balanced model JSON or a static `.pio.json` module without staging the source input. Inspect collections with PowerIO `list_states` and pass an `export_state` result to this tool.
 
 ## Prompt Example
 
