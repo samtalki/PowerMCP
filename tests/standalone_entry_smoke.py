@@ -7,6 +7,7 @@ import importlib.abc
 import runpy
 import sys
 import types
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -86,18 +87,31 @@ class _RequireCloneBootstrap(importlib.abc.MetaPathFinder):
             raise ModuleNotFoundError(
                 "powermcp is unavailable until the clone entrypoint bootstraps it"
             )
-        return None
 
 
 def main(tool: str, relative_script: str, expect_run: bool = True) -> None:
     script = REPO / relative_script
     _stub_engines(tool)
 
+    from mcp.server import stdio
+    from mcp.server.lowlevel.server import Server
     from mcp.server.mcpserver import MCPServer
 
     calls = []
     real_run = MCPServer.run
+    real_lowlevel_run = Server.run
+    real_stdio_server = stdio.stdio_server
     MCPServer.run = lambda self, *args, **kwargs: calls.append((self, args, kwargs))
+
+    async def record_lowlevel_run(self, *args, **kwargs):
+        calls.append((self, args, kwargs))
+
+    @asynccontextmanager
+    async def stub_stdio_server(*_args, **_kwargs):
+        yield None, None
+
+    Server.run = record_lowlevel_run
+    stdio.stdio_server = stub_stdio_server
     sys.meta_path.insert(0, _RequireCloneBootstrap())
     sys.path[:] = [
         str(script.parent),
@@ -110,11 +124,19 @@ def main(tool: str, relative_script: str, expect_run: bool = True) -> None:
         runpy.run_path(str(script), run_name="__main__" if expect_run else "clone_smoke")
     finally:
         MCPServer.run = real_run
+        Server.run = real_lowlevel_run
+        stdio.stdio_server = real_stdio_server
 
     if not expect_run:
         return
     assert len(calls) == 1, f"{tool}: expected one run call, got {len(calls)}"
-    tools = asyncio.run(calls[0][0].list_tools())
+    server = calls[0][0]
+    if isinstance(server, MCPServer):
+        tools = asyncio.run(server.list_tools())
+    else:
+        entry = server.get_request_handler("tools/list")
+        assert entry is not None
+        tools = asyncio.run(entry.handler(None, None)).tools
     assert tools, f"{tool}: server registered no tools"
 
 

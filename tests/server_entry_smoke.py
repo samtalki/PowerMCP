@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-import runpy
 import sys
 import types
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -97,17 +97,31 @@ def _stub_engines(tool: str) -> None:
 def main(tool_name: str) -> None:
     _stub_engines(tool_name)
 
+    from mcp.server import stdio
+    from mcp.server.lowlevel.server import Server
     from mcp.server.mcpserver import MCPServer
+
     from powermcp import runner
     from powermcp.registry import get_tool
 
     calls = []
     real_run = MCPServer.run
+    real_lowlevel_run = Server.run
+    real_stdio_server = stdio.stdio_server
 
     def record_run(self, *args, **kwargs):
         calls.append((self, args, kwargs))
 
+    async def record_lowlevel_run(self, *args, **kwargs):
+        calls.append((self, args, kwargs))
+
+    @asynccontextmanager
+    async def stub_stdio_server(*_args, **_kwargs):
+        yield None, None
+
     MCPServer.run = record_run
+    Server.run = record_lowlevel_run
+    stdio.stdio_server = stub_stdio_server
     try:
         tool = get_tool(tool_name)
         if tool.run_kind == "package":
@@ -118,10 +132,17 @@ def main(tool_name: str) -> None:
             runner._launch_script(tool)
     finally:
         MCPServer.run = real_run
+        Server.run = real_lowlevel_run
+        stdio.stdio_server = real_stdio_server
 
     assert len(calls) == 1, f"{tool_name}: expected one run call, got {len(calls)}"
     server, _args, _kwargs = calls[0]
-    tools = asyncio.run(server.list_tools())
+    if isinstance(server, MCPServer):
+        tools = asyncio.run(server.list_tools())
+    else:
+        entry = server.get_request_handler("tools/list")
+        assert entry is not None
+        tools = asyncio.run(entry.handler(None, None)).tools
     assert tools, f"{tool_name}: server registered no tools"
 
 

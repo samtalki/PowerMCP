@@ -5,8 +5,8 @@ The server under test is powerio's own ``powerio.mcp.server``: this repo runs
 that module and keeps no copy of it, so these tests are the consumer suite over
 a dependency's surface. powerio is a core dependency, so it is normally present;
 the importorskip below stays as insurance for stripped-down environments.
-The decorated tools stay ordinary callables, so most cases exercise them
-in-process; ``test_transport.py`` covers what only a real MCP transport shows.
+The public in process helpers exercise the tool implementations;
+``test_transport.py`` covers what only a real MCP transport shows.
 The launch test lives here rather than in test_runner.py so it skips with the
 rest of the module.
 
@@ -28,10 +28,10 @@ import types
 from pathlib import Path
 
 import pytest
+from packaging.version import Version
 
-pytest.importorskip("powerio", minversion="0.9.0")
-
-import powerio  # noqa: E402
+powerio = pytest.importorskip("powerio")
+assert Version("1.0.0") <= Version(powerio.__version__) < Version("2.0.0")
 from powerio.mcp import server as powerio_mcp  # noqa: E402
 
 from powermcp.registry import TOOLS  # noqa: E402
@@ -47,7 +47,9 @@ CASE9 = Path(__file__).resolve().parent / "data" / "case9.m"
 ACTIVSG200_PWD = (
     Path(__file__).resolve().parent / "data" / "powerworld" / "ACTIVSg200.pwd"
 )
-MINIMAL_BMOPF = '{"bus":{"a":{"terminal_names":["1"]}}}'
+OPENDSS_CASE = (
+    Path(__file__).resolve().parents[1] / "OpenDSS" / "13Bus" / "IEEE13Nodeckt.dss"
+)
 
 # 3-bus case with rating 0 branches, for the overwrite_zero_s_nom tests.
 ZERO_RATE_CASE = """function mpc = zero_rate
@@ -68,6 +70,52 @@ mpc.branch = [
 """
 
 
+def _diagnostic_codes(result):
+    return {item["code"] for item in result["diagnostics"]}
+
+
+def _module_json(module: powerio.PioModule) -> str:
+    return module.emit("pio-json").text
+
+
+def _parse_module(text: str) -> powerio.PioModule:
+    return powerio.parse_text(text, name="module.pio.json")
+
+
+def _diagnostic_module_json() -> str:
+    document = json.loads(_module_json(powerio.parse_file(CASE9)))
+    document["diagnostics"] = [
+        {
+            "id": "consumer-test",
+            "code": "READ.TEST.FIELD",
+            "severity": "warning",
+            "message": "consumer test diagnostic",
+            "target": "/buses/0",
+        }
+    ]
+    return json.dumps(document)
+
+
+def _assert_structured_adapter_response(result):
+    assert result["status"] == "success", result
+    assert "warnings" not in result
+    assert "package" not in result
+    assert "module" not in result
+    assert result["diagnostics"]
+    assert all(
+        {"code", "severity", "message"} <= diagnostic.keys()
+        for diagnostic in result["diagnostics"]
+    )
+    assert "READ.TEST.FIELD" in _diagnostic_codes(result)
+
+
+def _load_egret_mcp(tmp_path, monkeypatch):
+    pytest.importorskip("egret")
+    monkeypatch.setenv("POWERMCP_HOME", str(tmp_path / "powermcp-home"))
+    monkeypatch.syspath_prepend(str(TOOLS["egret"].resolve_server_dir()))
+    return importlib.import_module("egret_mcp")
+
+
 def test_parse_json_round_trips():
     r = powerio_mcp.parse(path=str(CASE9))
     assert r["schema"] == "powerio.parse"
@@ -76,7 +124,7 @@ def test_parse_json_round_trips():
     assert r["model"] == "balanced"
     assert r["json_format"] == "model-json"
     assert r["source_format"] == "matpower"
-    assert isinstance(r["warnings"], list)
+    assert isinstance(r["diagnostics"], list)
     assert r["summary"]["elements"]["buses"] == 9
     assert powerio.from_json(r["json"]).n_buses == 9
 
@@ -84,39 +132,52 @@ def test_parse_json_round_trips():
 def test_tool_surface_is_canonical():
     tools = {tool.name: tool for tool in asyncio.run(powerio_mcp.mcp.list_tools())}
     names = set(tools)
-    required_names = {
+    preferred_names = {
+        "emit",
+        "summarize",
+        "parse",
+        "to_normalized",
+        "calc_matrix",
+        "diagnostics",
+        "display",
+        "inspect",
+        "list_states",
+        "inspect_state",
+        "export_state",
+        "to_balanced_report",
+        "to_balanced",
+        "about",
+    }
+    obsolete_names = {
         "convert",
         "save",
         "summary",
-        "parse",
         "normalize",
         "matrix",
-        "diagnostics",
-        "display",
+        "state_inventory",
+        "select_state",
+        "to_balanced_inspect",
+        "dc_data",
     }
-    assert required_names <= names
-    for name in ("parse", "summary", "normalize", "matrix", "display"):
+    assert preferred_names <= names
+    assert names.isdisjoint(obsolete_names)
+    for name in ("parse", "summarize", "to_normalized", "calc_matrix", "display"):
         props = tools[name].input_schema["properties"]
         assert "from_format" in props
-        assert "format" not in props
     parse_props = tools["parse"].input_schema["properties"]
     assert "transport" in parse_props
-    convert_props = tools["convert"].input_schema["properties"]
-    assert "to_format" in convert_props and "from_format" in convert_props
-    assert "package_json" in convert_props
-    assert "to" not in convert_props and "format" not in convert_props
-    for name in ("summary", "normalize", "matrix"):
-        assert "package_json" in tools[name].input_schema["properties"]
-    save_schema = tools["save"].input_schema
-    assert save_schema["required"] == ["out_path"]
-    save_props = save_schema["properties"]
-    assert "to_format" in save_props and "from_format" in save_props
-    assert "package_json" in save_props
-    assert "to" not in save_props and "format" not in save_props
+    emit_schema = tools["emit"].input_schema
+    assert emit_schema["required"] == ["format"]
+    emit_props = emit_schema["properties"]
+    assert "format" in emit_props and "destination" in emit_props
+    assert "from_format" in emit_props and "module_json" in emit_props
+    assert "to_format" not in emit_props and "out_path" not in emit_props
+    for name in ("summarize", "to_normalized", "calc_matrix"):
+        assert "module_json" in tools[name].input_schema["properties"]
 
 
-def test_normalize_returns_dense_one_based_ids():
-    r = powerio_mcp.normalize(path=str(CASE9))
+def test_to_normalized_returns_dense_one_based_ids():
+    r = powerio_mcp.to_normalized(path=str(CASE9))
     case = powerio.from_json(r["json"])
     assert [b["id"] for b in case.buses] == list(range(1, 10))
 
@@ -126,15 +187,15 @@ def test_parse_transport_accepted_downstream():
     assert powerio.from_json(r["json"]).n_buses == 9
 
 
-def test_matrix_bprime():
-    m = powerio_mcp.matrix("bprime", path=str(CASE9))
-    assert m["schema"] == "powerio.matrix"
+def test_calc_matrix_bprime():
+    m = powerio_mcp.calc_matrix("bprime", path=str(CASE9))
+    assert m["schema"] == "powerio.calc_matrix"
     assert m["powerio_version"] == powerio.__version__
     assert m["domain"] == "transmission"
     assert m["model"] == "balanced"
     assert m["json_format"] == "model-json"
     assert m["source_format"] == "matpower"
-    assert isinstance(m["warnings"], list)
+    assert isinstance(m["diagnostics"], list)
     assert m["format"] == "coo"
     assert m["shape"] == [9, 9]
     assert m["nnz"] > 0
@@ -145,33 +206,34 @@ def test_matrix_bprime():
     assert type(m["col"][0]) is int
 
 
-def test_matrix_accepts_json_transport():
+def test_calc_matrix_accepts_json_transport():
     transport = powerio_mcp.parse(path=str(CASE9))["json"]
-    from_json = powerio_mcp.matrix("bprime", json=transport)
-    from_path = powerio_mcp.matrix("bprime", path=str(CASE9))
+    from_json = powerio_mcp.calc_matrix("bprime", json=transport)
+    from_path = powerio_mcp.calc_matrix("bprime", path=str(CASE9))
     assert from_json["shape"] == from_path["shape"]
     assert from_json["nnz"] == from_path["nnz"]
 
 
-def test_matrix_unknown_kind():
+def test_calc_matrix_unknown_kind():
     with pytest.raises(ValueError):
-        powerio_mcp.matrix("nope", path=str(CASE9))
+        powerio_mcp.calc_matrix("nope", path=str(CASE9))
 
 
-def test_convert_powermodels():
-    r = powerio_mcp.convert(to_format="powermodels-json", path=str(CASE9))
-    assert isinstance(r["warnings"], list)
+def test_emit_powermodels():
+    r = powerio_mcp.emit(format="powermodels-json", path=str(CASE9))
+    assert r["schema"] == "powerio.emit"
+    assert isinstance(r["diagnostics"], list)
     assert len(json.loads(r["text"])["bus"]) == 9
 
 
-def test_summary_fields():
-    s = powerio_mcp.summary(path=str(CASE9))
-    assert s["schema"] == "powerio.summary"
+def test_summarize_fields():
+    s = powerio_mcp.summarize(path=str(CASE9))
+    assert s["schema"] == "powerio.summarize"
     assert s["powerio_version"] == powerio.__version__
     assert s["domain"] == "transmission"
     assert s["model"] == "balanced"
     assert s["json_format"] == "model-json"
-    assert isinstance(s["warnings"], list)
+    assert isinstance(s["diagnostics"], list)
     assert s["elements"]["buses"] == 9
     assert s["base_mva"] == 100.0
     assert s["source_format"] == "matpower"
@@ -182,21 +244,21 @@ def test_summary_fields():
 
 def test_exactly_one_input_enforced():
     with pytest.raises(ValueError):
-        powerio_mcp.summary()
+        powerio_mcp.summarize()
     with pytest.raises(ValueError):
-        powerio_mcp.summary(path="x", content="y")
+        powerio_mcp.summarize(path="x", content="y")
     with pytest.raises(ValueError):
-        powerio_mcp.matrix("bprime")
+        powerio_mcp.calc_matrix("bprime")
     with pytest.raises(ValueError):
-        powerio_mcp.matrix("bprime", path=str(CASE9), json="{}")
+        powerio_mcp.calc_matrix("bprime", path=str(CASE9), json="{}")
 
 
 def test_inline_matpower_content_defaults_to_matpower():
-    assert powerio_mcp.convert(to_format="psse", content=CASE9.read_text())["text"]
+    assert powerio_mcp.emit(format="psse", content=CASE9.read_text())["text"]
 
 
-def test_matrix_lacpf():
-    m = powerio_mcp.matrix("lacpf", path=str(CASE9))
+def test_calc_matrix_lacpf():
+    m = powerio_mcp.calc_matrix("lacpf", path=str(CASE9))
     assert m["format"] == "coo"
     assert m["shape"] == [18, 18]
     assert m["nnz"] > 0
@@ -204,60 +266,65 @@ def test_matrix_lacpf():
     assert type(m["row"][0]) is int
 
 
-def test_save_writes_file(tmp_path):
+def test_emit_writes_file(tmp_path):
     out = tmp_path / "case9.json"
-    r = powerio_mcp.save(
-        to_format="powermodels-json", out_path=str(out), path=str(CASE9)
+    r = powerio_mcp.emit(
+        format="powermodels-json", destination=str(out), path=str(CASE9)
     )
     assert r["path"] == str(out)
     assert r["bytes_written"] == out.stat().st_size
-    assert isinstance(r["warnings"], list)
+    assert isinstance(r["diagnostics"], list)
     assert len(json.loads(out.read_text())["bus"]) == 9
 
 
-def test_save_refuses_overwrite(tmp_path):
+def test_emit_refuses_overwrite(tmp_path):
     out = tmp_path / "case9.m"
     out.write_text("existing")
     with pytest.raises(ValueError, match="overwrite"):
-        powerio_mcp.save(out_path=str(out), path=str(CASE9))
-    r = powerio_mcp.save(
-        out_path=str(out), path=str(CASE9), overwrite=True
+        powerio_mcp.emit(
+            format="matpower", destination=str(out), path=str(CASE9)
+        )
+    r = powerio_mcp.emit(
+        format="matpower", destination=str(out), path=str(CASE9), overwrite=True
     )
     assert r["bytes_written"] == out.stat().st_size
 
 
-def test_save_accepts_json_transport(tmp_path):
+def test_emit_accepts_json_transport(tmp_path):
     transport = powerio_mcp.parse(path=str(CASE9))["json"]
     out = tmp_path / "case9.m"
-    powerio_mcp.save(out_path=str(out), json=transport)
-    assert powerio.parse_file(out).n_buses == 9
+    powerio_mcp.emit(format="matpower", destination=str(out), json=transport)
+    assert powerio.parse_file(out).value.n_buses == 9
 
 
-def test_package_transport_flows_through_core_tools(tmp_path):
-    parsed = powerio_mcp.parse(path=str(CASE9), transport="package")
+def test_module_transport_flows_through_core_tools(tmp_path):
+    parsed = powerio_mcp.parse(path=str(CASE9), transport="module")
     assert parsed["schema"] == "powerio.parse"
-    assert parsed["transport"] == "package"
-    assert parsed["json_format"] == "package"
+    assert parsed["transport"] == "module"
+    assert parsed["json_format"] == "module"
     assert parsed["domain"] == "transmission"
     assert parsed["model"] == "balanced"
-    assert "package_json" in parsed
+    assert "module_json" in parsed
 
-    package = json.loads(parsed["package_json"])
-    assert package["model_kind"] == "balanced"
-    assert package["model"]["kind"] == "balanced"
+    module = json.loads(parsed["module_json"])
+    assert module["schema"] == "powerio.module"
+    assert module["version"] == 1
+    assert module["value"]["kind"] == "balanced_network"
 
-    package_json = parsed["package_json"]
-    assert powerio_mcp.summary(package_json=package_json)["elements"]["buses"] == 9
+    module_json = parsed["module_json"]
+    assert powerio_mcp.summarize(module_json=module_json)["elements"]["buses"] == 9
 
-    matrix = powerio_mcp.matrix("bprime", package_json=package_json)
+    matrix = powerio_mcp.calc_matrix("bprime", module_json=module_json)
     assert matrix["kind"] == "bprime"
     assert matrix["shape"] == [9, 9]
 
     out = tmp_path / "case9.m"
-    powerio_mcp.save(out_path=str(out), package_json=package_json)
-    assert powerio.parse_file(out).n_buses == 9
+    powerio_mcp.emit(
+        format="matpower", destination=str(out), module_json=module_json
+    )
+    assert powerio.parse_file(out).value.n_buses == 9
 
-    diag = powerio_mcp.diagnostics(package_json)
+    diag = powerio_mcp.diagnostics(module_json)
     assert diag["schema"] == "powerio.diagnostics"
     assert diag["model_kind"] == "balanced"
     assert diag["summary"]["status"] in {"ok", "info", "warning", "error", "fatal"}
@@ -265,108 +332,191 @@ def test_package_transport_flows_through_core_tools(tmp_path):
     assert isinstance(diag["diagnostics"], list)
 
 
-def test_pypsa_interchange_accepts_static_package(tmp_path):
-    package_json = powerio.Package.from_file(CASE9).to_json()
-    out = tmp_path / "case9-package.nc"
-    result = pypsa_mcp.import_case_from_json(package_json, str(out))
+def test_pypsa_interchange_accepts_static_module(tmp_path):
+    module_json = _diagnostic_module_json()
+    source_map = json.loads(module_json).get("source_map", [])
+    assert source_map
+    out = tmp_path / "case9-module.nc"
+    result = pypsa_mcp.import_case_from_json(module_json, str(out))
 
-    assert result["status"] == "success", result
-    assert result["package"]["model_kind"] == "balanced"
-    assert result["package"]["source_map_entries"] > 0
+    _assert_structured_adapter_response(result)
     assert len(pypsa.Network(str(out)).buses) == 9
 
 
-def test_pandapower_interchange_accepts_static_package():
+def test_pandapower_interchange_accepts_static_module():
     panda_dir = str(TOOLS["pandapower"].resolve_server_dir())
     if panda_dir not in sys.path:
         sys.path.insert(0, panda_dir)
     import panda_mcp  # noqa: E402
 
-    result = panda_mcp.load_network_from_json(
-        powerio.Package.from_file(CASE9).to_json()
-    )
+    result = panda_mcp.load_network_from_json(_diagnostic_module_json())
 
-    assert result["status"] == "success", result
-    assert result["package"]["model_kind"] == "balanced"
+    _assert_structured_adapter_response(result)
     assert len(panda_mcp._current_net.bus) == 9
 
 
-def test_solver_interchange_requires_explicit_package_state(tmp_path):
-    package = powerio.Package.from_file(CASE9)
-    package.set_operating_points(
+def test_core_solver_adapters_preserve_powerio_error_codes(tmp_path):
+    panda_dir = str(TOOLS["pandapower"].resolve_server_dir())
+    if panda_dir not in sys.path:
+        sys.path.insert(0, panda_dir)
+    import panda_mcp  # noqa: E402
+
+    results = (
+        panda_mcp.load_network_from_json("{not JSON"),
+        pypsa_mcp.import_case_from_json("{not JSON", str(tmp_path / "bad.nc")),
+    )
+
+    for result in results:
+        assert result["status"] == "error"
+        assert result["code"] == "REQUEST.FORMAT.UNKNOWN"
+        assert "REQUEST.FORMAT.UNKNOWN" in result["message"]
+
+
+def test_pandapower_export_uses_powerio_ppc_and_module_emit(monkeypatch):
+    panda_dir = str(TOOLS["pandapower"].resolve_server_dir())
+    if panda_dir not in sys.path:
+        sys.path.insert(0, panda_dir)
+    import panda_mcp  # noqa: E402
+
+    loaded = panda_mcp.load_network_from_any(str(CASE9))
+    assert loaded["status"] == "success", loaded
+
+    calls = []
+    original_from_ppc = powerio.from_ppc
+
+    def recording_from_ppc(ppc):
+        calls.append(ppc)
+        return original_from_ppc(ppc)
+
+    monkeypatch.setattr(powerio, "from_ppc", recording_from_ppc)
+    result = panda_mcp.export_network_to_format("matpower")
+
+    assert result["status"] == "success", result
+    assert len(calls) == 1
+    assert "mpc.baseMVA" in result["text"]
+    assert isinstance(result["diagnostics"], list)
+    assert "warnings" not in result
+
+
+def test_egret_interchange_accepts_static_module(tmp_path, monkeypatch):
+    egret_mcp = _load_egret_mcp(tmp_path, monkeypatch)
+
+    result = egret_mcp.load_model_from_json(_diagnostic_module_json())
+
+    _assert_structured_adapter_response(result)
+    assert Path(result["case_file"]).is_file()
+
+
+def test_egret_preserves_powerio_error_codes(tmp_path, monkeypatch):
+    egret_mcp = _load_egret_mcp(tmp_path, monkeypatch)
+
+    result = egret_mcp.load_model_from_json("{not JSON")
+
+    assert result["status"] == "error"
+    assert result["code"] == "REQUEST.FORMAT.UNKNOWN"
+    assert "REQUEST.FORMAT.UNKNOWN" in result["message"]
+
+
+def test_egret_interchange_accepts_case_file(tmp_path, monkeypatch):
+    egret_mcp = _load_egret_mcp(tmp_path, monkeypatch)
+
+    result = egret_mcp.load_model_from_any(str(CASE9))
+
+    assert result["status"] == "success", result
+    assert Path(result["case_file"]).is_file()
+    assert result["model_info"]["bus"] == 9
+    assert isinstance(result["diagnostics"], list)
+    assert "module" not in result
+    assert "warnings" not in result
+    assert "package" not in result
+
+
+def test_solver_interchange_requires_powerio_collection_export(tmp_path):
+    parsed = json.loads(_module_json(powerio.parse_file(CASE9)))
+    collection_json = json.dumps(
         {
-            "time_axis": {"periods": 1, "labels": ["dispatch"]},
-            "points": [
-                {
-                    "index": 0,
-                    "updates": [
+            "schema": "powerio.module",
+            "version": 1,
+            "producer": parsed["producer"],
+            "value": {
+                "kind": "balanced_network_scenario_set",
+                "data": {
+                    "scenarios": [
                         {
-                            "element": {
-                                "table": "generators",
-                                "source_uid": "generators:0",
-                            },
-                            "fields": {"pg": 123.0},
+                            "id": "base",
+                            "probability": 1.0,
+                            "value": parsed["value"]["data"],
                         }
-                    ],
-                }
-            ],
+                    ]
+                },
+            },
         }
     )
 
     rejected = pypsa_mcp.import_case_from_json(
-        package.to_json(), str(tmp_path / "unselected.nc")
+        collection_json, str(tmp_path / "unselected.nc")
     )
     assert rejected["status"] == "error"
-    assert "operating_point from [0]" in rejected["message"]
+    assert "list_states" in rejected["message"]
+    assert "export_state" in rejected["message"]
 
+    panda_dir = str(TOOLS["pandapower"].resolve_server_dir())
+    if panda_dir not in sys.path:
+        sys.path.insert(0, panda_dir)
+    import panda_mcp  # noqa: E402
+
+    panda_rejected = panda_mcp.load_network_from_json(collection_json)
+    assert panda_rejected["status"] == "error"
+    assert "list_states" in panda_rejected["message"]
+    assert "export_state" in panda_rejected["message"]
+
+    collection = _parse_module(collection_json)
+    exported = collection.export_state(scenario="base")
     out = tmp_path / "selected.nc"
-    selected = pypsa_mcp.import_case_from_json(
-        package.to_json(), str(out), operating_point=0
-    )
+    selected = pypsa_mcp.import_case_from_json(_module_json(exported), str(out))
     assert selected["status"] == "success", selected
-    assert selected["package"]["materialized"] == {
-        "kind": "operating_point",
-        "index": 0,
-    }
-    assert pypsa.Network(str(out)).generators.iloc[0].p_set == pytest.approx(123.0)
+    assert "module" not in selected
+    assert len(pypsa.Network(str(out)).buses) == 9
 
 
-def test_solver_interchange_materializes_study_commit(tmp_path):
-    package = powerio.Package.from_file(CASE9)
-    document = json.loads(package.to_json())
-    document["study"] = {
-        "label": "load study",
-        "commits": [
-            {
-                "label": "add load",
-                "edits": [
-                    {
-                        "kind": "demand_delta",
-                        "bus": {"table": "buses", "source_uid": "buses:0"},
-                        "p_mw": 7.0,
-                        "q_mvar": 3.0,
-                    }
-                ],
-            }
-        ],
-    }
-
-    out = tmp_path / "study.nc"
-    result = pypsa_mcp.import_case_from_json(
-        json.dumps(document), str(out), study_commit=0
+def test_egret_requires_powerio_collection_export(tmp_path, monkeypatch):
+    egret_mcp = _load_egret_mcp(tmp_path, monkeypatch)
+    parsed = json.loads(_module_json(powerio.parse_file(CASE9)))
+    collection_json = json.dumps(
+        {
+            "schema": "powerio.module",
+            "version": 1,
+            "producer": parsed["producer"],
+            "value": {
+                "kind": "balanced_network_scenario_set",
+                "data": {
+                    "scenarios": [
+                        {
+                            "id": "base",
+                            "probability": 1.0,
+                            "value": parsed["value"]["data"],
+                        }
+                    ]
+                },
+            },
+        }
     )
 
-    assert result["status"] == "success", result
-    assert result["package"]["materialized"] == {"kind": "study_commit", "index": 0}
-    assert (pypsa.Network(str(out)).loads.p_set == 7.0).any()
+    rejected = egret_mcp.load_model_from_json(collection_json)
+
+    assert rejected["status"] == "error"
+    assert "list_states" in rejected["message"]
+    assert "export_state" in rejected["message"]
 
 
-def test_save_exactly_one_input(tmp_path):
+def test_emit_requires_exactly_one_input(tmp_path):
     out = tmp_path / "x.m"
     with pytest.raises(ValueError):
-        powerio_mcp.save(out_path=str(out))
+        powerio_mcp.emit(format="matpower", destination=str(out))
     with pytest.raises(ValueError):
-        powerio_mcp.save(out_path=str(out), path="a", json="{}")
+        powerio_mcp.emit(
+            format="matpower", destination=str(out), path="a", json="{}"
+        )
 
 
 def test_pypsa_import_case_from_any(tmp_path):
@@ -394,7 +544,7 @@ def test_pypsa_import_preserves_supported_generator_costs(tmp_path):
     generators = pypsa.Network(str(out)).generators
     assert (generators.marginal_cost != 0).all()
     assert generators.start_up_cost.tolist() == pytest.approx([1500, 2000, 3000])
-    assert any("constant polynomial cost" in warning for warning in result["warnings"])
+    assert "POWERMCP.PYPSA.CONSTANT_COST_DROPPED" in _diagnostic_codes(result)
 
 
 def test_pypsa_import_applies_generator_voltage_targets_to_buses(tmp_path):
@@ -478,11 +628,12 @@ def test_pypsa_import_overwrite_zero_s_nom(tmp_path):
     src.write_text(ZERO_RATE_CASE)
 
     bare = pypsa_mcp.import_case_from_any(str(src), str(tmp_path / "bare.nc"))
-    assert any("rating 0" in w for w in bare["warnings"]), bare["warnings"]
+    assert "POWERMCP.PYPSA.ZERO_BRANCH_RATING" in _diagnostic_codes(bare), bare
 
     out = tmp_path / "set.nc"
     r = pypsa_mcp.import_case_from_any(str(src), str(out), overwrite_zero_s_nom=100.0)
-    assert not any("rating 0" in w for w in r["warnings"]), r["warnings"]
+    assert "POWERMCP.PYPSA.ZERO_BRANCH_RATING_REPLACED" in _diagnostic_codes(r), r
+    assert "POWERMCP.PYPSA.ZERO_BRANCH_RATING" not in _diagnostic_codes(r), r
     assert (pypsa.Network(str(out)).lines.s_nom == 100.0).all()
 
 
@@ -615,9 +766,8 @@ def test_launch_powerio_runs_once(record_mcp_run):
     assert transport == "stdio"
 
 
-def test_inline_convert_stages_no_temp_files(monkeypatch):
-    # Inline conversion goes through powerio.convert_str entirely in memory;
-    # touching tempfile would be a regression to the old staging path.
+def test_inline_emit_stages_no_temp_files(monkeypatch):
+    # Text emission stays in memory when no destination is supplied.
     import tempfile
 
     def boom(*args, **kwargs):
@@ -625,8 +775,8 @@ def test_inline_convert_stages_no_temp_files(monkeypatch):
 
     monkeypatch.setattr(tempfile, "mkstemp", boom)
     monkeypatch.setattr(tempfile, "NamedTemporaryFile", boom)
-    r = powerio_mcp.convert(
-        to_format="psse", content=CASE9.read_text(), from_format="matpower"
+    r = powerio_mcp.emit(
+        format="psse", content=CASE9.read_text(), from_format="matpower"
     )
     assert r["text"]
 
@@ -711,26 +861,20 @@ def test_pandapower_pickle_input_is_rejected_without_execution(tmp_path):
     assert not marker.exists()
 
 
-def test_matrix_laplacian():
-    m = powerio_mcp.matrix("laplacian", path=str(CASE9))
+def test_calc_matrix_laplacian():
+    m = powerio_mcp.calc_matrix("laplacian", path=str(CASE9))
     assert m["format"] == "coo"
     assert m["shape"] == [9, 9]
 
 
-def test_matrix_bad_json_raises_valueerror():
+def test_calc_matrix_bad_json_raises_valueerror():
     with pytest.raises(ValueError):
-        powerio_mcp.matrix("bprime", json="{not valid json")
+        powerio_mcp.calc_matrix("bprime", json="{not valid json")
 
 
-def test_convert_oserror_normalizes_to_valueerror(monkeypatch):
-    # An OSError from convert_str (e.g. disk full) must surface as ValueError,
-    # not leak as a raw OSError.
-    def boom(content, to, from_):
-        raise OSError("disk full")
-
-    monkeypatch.setattr(powerio, "convert_str", boom)
+def test_emit_unknown_format_maps_cleanly():
     with pytest.raises(ValueError):
-        powerio_mcp.convert(to_format="psse", content="x", from_format="matpower")
+        powerio_mcp.emit(format="no-such-format", path=str(CASE9))
 
 
 def test_allowed_roots_rejects_read_outside_root(tmp_path, monkeypatch):
@@ -764,8 +908,8 @@ def test_allowed_roots_rejects_write_outside_root(tmp_path, monkeypatch):
     outside_out.parent.mkdir()
     monkeypatch.setenv("POWERIO_MCP_ALLOWED_ROOTS", str(root))
     with pytest.raises(ValueError, match="outside allowed MCP roots"):
-        powerio_mcp.save(
-            out_path=str(outside_out), content=CASE9.read_text(), to_format="psse"
+        powerio_mcp.emit(
+            destination=str(outside_out), content=CASE9.read_text(), format="psse"
         )
 
 
@@ -774,7 +918,7 @@ def test_allowed_roots_admits_write_inside_root(tmp_path, monkeypatch):
     root.mkdir()
     monkeypatch.setenv("POWERIO_MCP_ALLOWED_ROOTS", str(root))
     out = root / "case9.raw"
-    r = powerio_mcp.save(out_path=str(out), content=CASE9.read_text(), to_format="psse")
+    r = powerio_mcp.emit(destination=str(out), content=CASE9.read_text(), format="psse")
     assert r["path"] == str(out)
     assert out.exists()
 
@@ -792,27 +936,26 @@ def test_unreadable_file_maps_cleanly(tmp_path):
     locked.chmod(0o000)
     try:
         with pytest.raises(ValueError, match="cannot read input"):
-            powerio_mcp.convert(to_format="psse", path=str(locked))
+            powerio_mcp.emit(format="psse", path=str(locked))
         with pytest.raises(ValueError, match="cannot read input"):
-            powerio_mcp.summary(path=str(locked))
+            powerio_mcp.summarize(path=str(locked))
     finally:
         locked.chmod(0o644)
 
 
 def test_wrong_schema_json_maps_cleanly():
-    # Wrong-schema (but well-formed) JSON keeps the one error shape too; the
-    # malformed-JSON case is covered above. Pinned to the diagnostic code, since
-    # powerio 0.9.0 replaced the old "parse failed" prose with coded messages.
+    # Wrong schema but well formed JSON keeps the same coded ValueError shape;
+    # malformed JSON is covered above.
     for bad in ("{}", "[]", "null", '{"buses": "nope"}'):
         with pytest.raises(ValueError, match=r"PARSE\.SOURCE\.MALFORMED"):
-            powerio_mcp.matrix("bprime", json=bad, json_format="model-json")
+            powerio_mcp.calc_matrix("bprime", json=bad, json_format="model-json")
 
 
-def test_legacy_json_format_token_still_accepted():
-    # Responses state `model-json` since powerio 0.9, but the old `powerio-json`
-    # spelling stays valid as an input so an older client keeps working.
+def test_model_json_format_token_is_explicitly_accepted():
     transport = powerio_mcp.parse(path=str(CASE9))["json"]
-    m = powerio_mcp.matrix("bprime", json=transport, json_format="powerio-json")
+    m = powerio_mcp.calc_matrix(
+        "bprime", json=transport, json_format="model-json"
+    )
     assert m["shape"] == [9, 9]
 
 
@@ -842,6 +985,54 @@ def test_andes_load_network_from_json(tmp_path, andes_mcp):
     assert r["info"]["buses"] == 9
 
 
+def test_andes_preserves_powerio_error_codes(tmp_path, andes_mcp):
+    result = andes_mcp.load_network_from_json("{not JSON", str(tmp_path / "bad.m"))
+
+    assert result["status"] == "error"
+    assert result["code"] == "REQUEST.FORMAT.UNKNOWN"
+    assert "REQUEST.FORMAT.UNKNOWN" in result["message"]
+
+
+def test_andes_interchange_accepts_static_module(tmp_path, andes_mcp):
+    out = tmp_path / "case9_module.m"
+
+    result = andes_mcp.load_network_from_json(_diagnostic_module_json(), str(out))
+
+    _assert_structured_adapter_response(result)
+    assert out.is_file()
+
+
+def test_andes_requires_powerio_collection_export(tmp_path, andes_mcp):
+    parsed = json.loads(_module_json(powerio.parse_file(CASE9)))
+    collection_json = json.dumps(
+        {
+            "schema": "powerio.module",
+            "version": 1,
+            "producer": parsed["producer"],
+            "value": {
+                "kind": "balanced_network_scenario_set",
+                "data": {
+                    "scenarios": [
+                        {
+                            "id": "base",
+                            "probability": 1.0,
+                            "value": parsed["value"]["data"],
+                        }
+                    ]
+                },
+            },
+        }
+    )
+
+    rejected = andes_mcp.load_network_from_json(
+        collection_json, str(tmp_path / "unselected.m")
+    )
+
+    assert rejected["status"] == "error"
+    assert "list_states" in rejected["message"]
+    assert "export_state" in rejected["message"]
+
+
 def test_andes_load_missing_file(tmp_path, andes_mcp):
     r = andes_mcp.load_network_from_any("/nope/missing.m", str(tmp_path / "x.m"))
     assert r["status"] == "error"
@@ -852,18 +1043,17 @@ def test_andes_load_missing_file(tmp_path, andes_mcp):
 # pandapower-json plus folder and Parquet formats routed through generic verbs.
 # ---------------------------------------------------------------------------
 
-def test_convert_to_pandapower_json():
-    r = powerio_mcp.convert(to_format="pandapower-json", path=str(CASE9))
+def test_emit_to_pandapower_json():
+    r = powerio_mcp.emit(format="pandapower-json", path=str(CASE9))
     assert r["text"]
     assert json.loads(r["text"])  # well-formed JSON
 
 
 def test_pandapower_json_round_trips_through_transport():
-    # pandapower-json is a plain text format, so it flows through the existing
-    # save/parse tools with no dedicated tool.
+    # pandapower-json is a plain text format, so it flows through emit and parse.
     transport = powerio_mcp.parse(path=str(CASE9))["json"]
     out = powerio_mcp.parse(
-        content=powerio_mcp.convert(to_format="pandapower-json", path=str(CASE9))[
+        content=powerio_mcp.emit(format="pandapower-json", path=str(CASE9))[
             "text"
         ],
         from_format="pandapower-json",
@@ -873,11 +1063,9 @@ def test_pandapower_json_round_trips_through_transport():
 
 
 def test_pypsa_csv_folder_round_trip(tmp_path):
-    # pypsa-csv is a directory format: write through save(to_format="pypsa-csv"), read
-    # back through parse via a folder path (powerio 0.3.3 folded the dedicated
-    # read/write_pypsa_csv_folder tools into the bare verbs).
+    # pypsa-csv is a directory format: emit to a folder, then parse the folder.
     out_dir = tmp_path / "pypsa_csv"
-    w = powerio_mcp.save(to_format="pypsa-csv", out_path=str(out_dir), path=str(CASE9))
+    w = powerio_mcp.emit(format="pypsa-csv", destination=str(out_dir), path=str(CASE9))
     assert w["files"], w
     assert (out_dir / "buses.csv").exists()
     r = powerio_mcp.parse(path=str(out_dir))
@@ -888,7 +1076,7 @@ def test_pypsa_csv_folder_round_trip(tmp_path):
 def test_pypsa_csv_folder_accepts_transport(tmp_path):
     transport = powerio_mcp.parse(path=str(CASE9))["json"]
     out_dir = tmp_path / "from_json"
-    w = powerio_mcp.save(to_format="pypsa-csv", out_path=str(out_dir), json=transport)
+    w = powerio_mcp.emit(format="pypsa-csv", destination=str(out_dir), json=transport)
     assert (out_dir / "generators.csv").exists(), w
 
 
@@ -899,7 +1087,7 @@ def test_read_pypsa_csv_missing_folder_maps_cleanly(tmp_path):
 
 def test_gridfm_round_trip(tmp_path):
     out_dir = tmp_path / "gfm"
-    w = powerio_mcp.save(to_format="gridfm", out_path=str(out_dir), path=str(CASE9))
+    w = powerio_mcp.emit(format="gridfm", destination=str(out_dir), path=str(CASE9))
     assert w["files"], w
     r = powerio_mcp.parse(
         path=str(out_dir), from_format="gridfm", options={"scenario": 0}
@@ -996,10 +1184,10 @@ def test_powerio_to_opendss_composition(monkeypatch, tmp_path):
     configuration = _load_opendss_configuration(monkeypatch)
 
     dss_path = tmp_path / "feeder.dss"
-    save_result = powerio_mcp.save(
-        out_path=str(dss_path),
-        json=MINIMAL_BMOPF,
-        json_format="bmopf-json",
+    save_result = powerio_mcp.emit(
+        format="dss",
+        destination=str(dss_path),
+        path=str(OPENDSS_CASE),
     )
     assert save_result["path"] == str(dss_path)
     assert dss_path.exists()
