@@ -8,8 +8,8 @@ whether it is Windows-only, and which local software paths it needs captured in
 
 from __future__ import annotations
 
-import importlib.resources as resources
 from dataclasses import dataclass, field
+from importlib import resources
 from pathlib import Path
 
 # In an editable install or a raw git checkout, the powermcp package lives at
@@ -87,7 +87,7 @@ class Tool:
 # Tools whose path is genuinely Windows-only commercial software.
 _W = True
 
-TOOLS: dict[str, "Tool"] = {
+TOOLS: dict[str, Tool] = {
     t.name: t
     for t in (
         # ---- CORE (always installed) ----
@@ -151,7 +151,19 @@ TOOLS: dict[str, "Tool"] = {
             "powerio", "PowerIO", "open-source", windows_only=False, extra=None,
             server_dir=None, run_kind="package", module="powerio.mcp",
             probe="powerio",
-            notes="Format-neutral conversion, matrices, and auditable .pio.json packages. Its canonical MCP server owns package operations; pandapower, PyPSA, Egret, and ANDES resolve package states only when importing into a solver.",
+            notes="Native interchange, diagnostics, matrices, lowerings, and auditable .pio.json modules. Its MCP server owns module and collection operations; solver adapters accept exported static cases.",
+        ),
+        Tool(
+            "tellegen", "Tellegen", "open-source", windows_only=False,
+            extra="tellegen", server_dir="tellegen", run_kind="script",
+            entry_rel="tellegen_mcp.py", probe=None,
+            config_keys=(
+                ConfigKey("binary", "Path to the Tellegen CLI executable", "file"),
+            ),
+            notes=(
+                "DC OPF and capacity planning over PowerIO modules. Build the "
+                "Tellegen CLI separately, then configure its executable path."
+            ),
         ),
         # ---- CLOSED-SOURCE / VENDOR ----
         Tool(
@@ -256,14 +268,14 @@ def install_hint(extra: str | None) -> str:
     return f"pip install powermcp[{extra}]" if extra else "pip install powermcp"
 
 
-def get_tool(name: str) -> "Tool":
+def get_tool(name: str) -> Tool:
     try:
         return TOOLS[name]
     except KeyError:
         raise KeyError(f"unknown tool '{name}'. Known tools: {', '.join(TOOLS)}") from None
 
 
-def all_tools() -> list["Tool"]:
+def all_tools() -> list[Tool]:
     return list(TOOLS.values())
 
 

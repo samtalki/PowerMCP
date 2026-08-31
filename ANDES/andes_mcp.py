@@ -1,4 +1,5 @@
 import andes
+import powerio
 import logging
 import os
 import io
@@ -16,7 +17,11 @@ _repo_root_added = _repo_root not in sys.path
 if _repo_root_added:
     sys.path.insert(0, _repo_root)
 try:
-    from powermcp.solver_case import resolve_solver_case
+    from powermcp.solver_case import (
+        diagnostic_records,
+        powerio_error_response,
+        resolve_solver_case,
+    )
     from powermcp.sandbox import (
         PathNotAllowed,
         checked_path,
@@ -486,8 +491,8 @@ def get_system_info() -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# PowerIO interchange: resolve one balanced state, then stage MATPOWER text for
-# ANDES to load natively through run_power_flow.
+# PowerIO interchange: resolve one balanced module, then stage MATPOWER text
+# for ANDES to load natively through run_power_flow.
 # ---------------------------------------------------------------------------
 
 
@@ -495,25 +500,24 @@ def get_system_info() -> Dict[str, Any]:
 def load_network_from_json(
     network_json: str,
     out_path: str,
-    operating_point: Optional[int] = None,
-    study_commit: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Stage PowerIO model JSON or one package state as MATPOWER for ANDES.
+    """Stage PowerIO model JSON or one static module as MATPOWER for ANDES.
 
-    Accepts the ``json`` string returned by the powerio server's parse tool.
+    Accepts balanced model JSON or a static ``.pio.json`` module exported by
+    PowerIO. Inspect collection modules with PowerIO ``list_states`` and reduce
+    them with ``export_state`` before they cross the solver boundary.
     Converts the network to MATPOWER format, writes it to out_path (use a .m
     extension), and returns the path along with component
-    counts. Pass out_path to run_power_flow to run the simulation. powerio is a
+    counts. Pass out_path to run_power_flow to run the simulation. PowerIO is a
     core dependency, so this is always available.
 
     Args:
-        network_json: The JSON transport string from powerio
+        network_json: PowerIO balanced model JSON or stored module JSON
         out_path: Destination for the MATPOWER case file (.m)
-        operating_point: Optional package operating-point index to materialize
-        study_commit: Optional package study-commit index to materialize
 
     Returns:
-        Dict with status, case_file path, component counts, and fidelity warnings
+        Dict with status, case_file path, component counts, structured
+        diagnostics
     """
     try:
         out_path = checked_path(out_path, purpose="out_path", for_write=True)
@@ -522,14 +526,14 @@ def load_network_from_json(
     try:
         prepared = resolve_solver_case(
             network_json=network_json,
-            operating_point=operating_point,
-            study_commit=study_commit,
         )
         case = prepared.network
-        conv = case.to_format("matpower")
+        conversion = prepared.module.emit("matpower")
         abs_out = os.path.abspath(out_path)
         with open(abs_out, "w") as fh:
-            fh.write(conv.text)
+            fh.write(conversion.text)
+    except powerio.PowerIOError as exc:
+        return powerio_error_response(exc)
     except Exception as e:
         return {"status": "error", "message": str(e)}
     return {
@@ -539,10 +543,11 @@ def load_network_from_json(
         "info": {
             "buses": case.n_buses,
             "branches": case.n_branches,
-            "generators": case.n_gens,
+            "generators": case.n_generators,
         },
-        "warnings": list(prepared.warnings) + list(conv.warnings),
-        **({"package": prepared.package} if prepared.package is not None else {}),
+        "diagnostics": list(
+            diagnostic_records(prepared.diagnostics, conversion.diagnostics)
+        ),
     }
 
 
@@ -551,26 +556,25 @@ def load_network_from_any(
     file_path: str,
     out_path: str,
     source_format: Optional[str] = None,
-    operating_point: Optional[int] = None,
-    study_commit: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Stage any powerio readable case as a MATPOWER file for ANDES.
+    """Stage any case PowerIO can read as a MATPOWER file for ANDES.
 
     Reads MATPOWER .m, PSS/E .raw (v33), PowerWorld .aux, PowerModels JSON, or
-    egret JSON via powerio and writes a MATPOWER file to out_path (use a .m
-    extension). Pass out_path to run_power_flow to run the simulation. powerio
-    is a core dependency, so this is always available.
+    Egret JSON via PowerIO and writes a MATPOWER file to out_path (use a .m
+    extension). Pass out_path to run_power_flow to run the simulation. PowerIO
+    is a core dependency, so this is always available. Inspect collection
+    modules with PowerIO ``list_states`` and reduce them with ``export_state``
+    first.
 
     Args:
         file_path: Path to the source case file
         out_path: Destination for the MATPOWER case file (.m)
         source_format: Input format name (matpower, powermodels-json, egret-json,
             psse, powerworld); inferred from the file extension when omitted
-        operating_point: Optional package operating-point index to materialize
-        study_commit: Optional package study-commit index to materialize
 
     Returns:
-        Dict with status, case_file path, component counts, and fidelity warnings
+        Dict with status, case_file path, component counts, structured
+        diagnostics
     """
     try:
         file_path = checked_path(file_path, purpose="file_path")
@@ -584,16 +588,16 @@ def load_network_from_any(
         prepared = resolve_solver_case(
             file_path=file_path,
             source_format=source_format,
-            operating_point=operating_point,
-            study_commit=study_commit,
         )
         case = prepared.network
-        conv = case.to_format("matpower")
+        conversion = prepared.module.emit("matpower")
         abs_out = os.path.abspath(out_path)
         with open(abs_out, "w") as fh:
-            fh.write(conv.text)
+            fh.write(conversion.text)
     except FileNotFoundError:
         return {"status": "error", "message": f"File not found: {file_path}"}
+    except powerio.PowerIOError as exc:
+        return powerio_error_response(exc)
     except Exception as e:
         return {"status": "error", "message": str(e)}
     return {
@@ -603,10 +607,11 @@ def load_network_from_any(
         "info": {
             "buses": case.n_buses,
             "branches": case.n_branches,
-            "generators": case.n_gens,
+            "generators": case.n_generators,
         },
-        "warnings": list(prepared.warnings) + list(conv.warnings),
-        **({"package": prepared.package} if prepared.package is not None else {}),
+        "diagnostics": list(
+            diagnostic_records(prepared.diagnostics, conversion.diagnostics)
+        ),
     }
 
 

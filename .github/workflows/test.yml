@@ -24,10 +24,17 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip
+
+      # Remove this step once PowerIO 1.0.0 is published on PyPI.
+      - name: Install PowerIO 1.0 candidate
+        run: >-
+          python -m pip install
+          "powerio[mcp,matrix] @ git+https://github.com/eigenergy/powerio.git@e39afc9d669349df5133ff6140598010a498cdb1"
+
       - name: Install package
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e . pytest
+        run: python -m pip install -e . pytest
 
       - name: Run tests
         run: python -m pytest tests/ -q

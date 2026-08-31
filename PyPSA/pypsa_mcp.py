@@ -6,6 +6,7 @@ from mcp.server.mcpserver import MCPServer as FastMCP
 from pypsa import Network
 import numpy as np
 import pandas as pd
+import powerio
 from typing import Dict, List, Optional, Union, Any
 
 _repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -13,7 +14,12 @@ _repo_root_added = _repo_root not in sys.path
 if _repo_root_added:
     sys.path.insert(0, _repo_root)
 try:
-    from powermcp.solver_case import resolve_solver_case
+    from powermcp.solver_case import (
+        bridge_diagnostic,
+        diagnostic_records,
+        powerio_error_response,
+        resolve_solver_case,
+    )
     from powermcp.sandbox import (
         PathNotAllowed,
         checked_path,
@@ -699,20 +705,28 @@ def export_to_csv_folder(network_name: str, folder_path: str) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# PowerIO interchange: resolve one balanced state, use PowerIO's native PyPSA CSV
-# writer, then save the PyPSA network to the NetCDF path used by other tools.
+# PowerIO interchange: resolve one balanced state, emit PowerIO's native PyPSA
+# CSV artifact, then save it to the NetCDF path used by other tools.
 # ---------------------------------------------------------------------------
 
-def _import_case_to_netcdf(case, output_path: str, overwrite_zero_s_nom: Optional[float]):
-    """Use PowerIO's native PyPSA CSV writer, then persist the network."""
-    with tempfile.TemporaryDirectory(prefix="powermcp-pypsa-") as staging:
-        written = case.write_pypsa_csv_folder(staging)
+def _import_case_to_netcdf(
+    prepared,
+    output_path: str,
+    overwrite_zero_s_nom: Optional[float],
+):
+    """Emit PowerIO's native PyPSA CSV artifact, then persist the network."""
+    with tempfile.TemporaryDirectory(prefix="powermcp-pypsa-") as staging_root:
+        staging = os.path.join(staging_root, "case")
+        emission = prepared.module.emit("pypsa-csv", staging)
         network = Network()
         network.import_from_csv_folder(staging)
-    warnings = list(written.get("warnings", []))
+    diagnostics = list(
+        diagnostic_records(prepared.diagnostics, emission.diagnostics)
+    )
+    case = prepared.network
 
-    # PowerIO 0.9 preserves source generator voltage targets in its native
-    # generators.csv extension column.  PyPSA imports that column but regulates
+    # PowerIO preserves source generator voltage targets in its native
+    # generators.csv extension column. PyPSA imports that column but regulates
     # voltage through Bus.v_mag_pu_set, so apply it explicitly before solving.
     if "v_mag_pu_set" in network.generators:
         generators = network.generators
@@ -727,13 +741,16 @@ def _import_case_to_netcdf(case, output_path: str, overwrite_zero_s_nom: Optiona
             target = float(values.iloc[0])
             network.buses.loc[bus, "v_mag_pu_set"] = target
             if not np.allclose(values.to_numpy(), target):
-                warnings.append(
-                    f"multiple voltage targets regulate bus {bus}; "
-                    f"using {target} from the first generator"
+                diagnostics.append(
+                    bridge_diagnostic(
+                        "POWERMCP.PYPSA.VOLTAGE_TARGET_CONFLICT",
+                        f"multiple voltage targets regulate bus {bus}; "
+                        f"using {target} from the first generator",
+                    )
                 )
 
-    # The 0.9 CSV writer emits generators in canonical source order.  Restore
-    # transition costs that PyPSA supports but the writer does not yet emit.
+    # The CSV emitter writes generators in canonical source order. Restore
+    # transition costs that PyPSA supports but the emitter does not yet carry.
     source_generators = list(case.generators)
     if len(source_generators) == len(network.generators):
         network.generators["start_up_cost"] = [
@@ -745,9 +762,12 @@ def _import_case_to_netcdf(case, output_path: str, overwrite_zero_s_nom: Optiona
             for generator in source_generators
         ]
     else:
-        warnings.append(
-            "generator transition costs could not be restored because the "
-            "PowerIO and PyPSA generator counts differ"
+        diagnostics.append(
+            bridge_diagnostic(
+                "POWERMCP.PYPSA.GENERATOR_COUNT_MISMATCH",
+                "generator transition costs could not be restored because the "
+                "PowerIO and PyPSA generator counts differ",
+            )
         )
     constant_costs = sum(
         1
@@ -757,9 +777,13 @@ def _import_case_to_netcdf(case, output_path: str, overwrite_zero_s_nom: Optiona
         and float((generator.get("cost") or {})["coeffs"][-1]) != 0.0
     )
     if constant_costs:
-        warnings.append(
-            f"{constant_costs} generator constant polynomial cost term(s) "
-            "have no equivalent in the PyPSA generator objective and were dropped"
+        diagnostics.append(
+            bridge_diagnostic(
+                "POWERMCP.PYPSA.CONSTANT_COST_DROPPED",
+                f"{constant_costs} generator constant polynomial cost term(s) "
+                "have no equivalent in the PyPSA generator objective and were "
+                "dropped",
+            )
         )
 
     zero_ratings = 0
@@ -770,11 +794,23 @@ def _import_case_to_netcdf(case, output_path: str, overwrite_zero_s_nom: Optiona
         zero_ratings += int(zero.sum())
         if overwrite_zero_s_nom is not None:
             table.loc[zero, "s_nom"] = overwrite_zero_s_nom
-    if zero_ratings and overwrite_zero_s_nom is None:
-        warnings.append(
-            f"{zero_ratings} branch(es) with rating 0 imported with s_nom 0; "
-            "pass overwrite_zero_s_nom to set a value"
-        )
+    if zero_ratings:
+        if overwrite_zero_s_nom is None:
+            diagnostics.append(
+                bridge_diagnostic(
+                    "POWERMCP.PYPSA.ZERO_BRANCH_RATING",
+                    f"{zero_ratings} branch(es) with rating 0 imported with "
+                    "s_nom 0; pass overwrite_zero_s_nom to set a value",
+                )
+            )
+        else:
+            diagnostics.append(
+                bridge_diagnostic(
+                    "POWERMCP.PYPSA.ZERO_BRANCH_RATING_REPLACED",
+                    f"replaced s_nom 0 on {zero_ratings} branch(es) with "
+                    f"{overwrite_zero_s_nom}",
+                )
+            )
     try:
         network.export_to_netcdf(output_path)
     except OSError as exc:
@@ -787,7 +823,7 @@ def _import_case_to_netcdf(case, output_path: str, overwrite_zero_s_nom: Optiona
         "transformers": len(network.transformers),
         "shunt_impedances": len(network.shunt_impedances),
     }
-    return info, warnings
+    return info, list(diagnostic_records(diagnostics))
 
 
 @mcp.tool()
@@ -796,31 +832,25 @@ def import_case_from_any(
     output_path: str,
     source_format: Optional[str] = None,
     overwrite_zero_s_nom: Optional[float] = None,
-    operating_point: Optional[int] = None,
-    study_commit: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Import any powerio readable case file as a PyPSA network saved to a
     NetCDF file.
 
-    Reads any balanced PowerIO format or a ``.pio.json`` package and writes a
-    PyPSA network to output_path. If the package contains stored state data,
-    select exactly one operating_point or study_commit; PowerIO materializes it
-    first.
-    PowerIO's native PyPSA writer preserves supported costs and element status.
+    Reads any balanced PowerIO format or stored ``.pio.json`` module and writes
+    a PyPSA network to output_path. Collection modules must be exported to a
+    static module through PowerIO before being passed to this tool. PowerIO's
+    native PyPSA emitter preserves supported costs and element status.
 
     Args:
         file_path: Path to the case file
         output_path: Where to save the imported network (.nc)
-        source_format: Input format name (matpower, powermodels-json,
-            egret-json, psse, powerworld); inferred from the file extension
-            when omitted
+        source_format: Optional PowerIO input format name; inferred from the
+            file extension when omitted
         overwrite_zero_s_nom: Replacement s_nom for branches with rating 0
-        operating_point: Optional package operating-point index to materialize
-        study_commit: Optional package study-commit index to materialize
 
     Returns:
         Dict with status, the saved network_file path, component counts, and
-        warnings about dropped or adjusted data
+        structured diagnostics for dropped or adjusted data
     """
     try:
         file_path = checked_path(file_path, purpose="file_path")
@@ -834,15 +864,14 @@ def import_case_from_any(
         prepared = resolve_solver_case(
             file_path=file_path,
             source_format=source_format,
-            operating_point=operating_point,
-            study_commit=study_commit,
         )
-        info, warnings = _import_case_to_netcdf(
-            prepared.network, output_path, overwrite_zero_s_nom
+        info, diagnostics = _import_case_to_netcdf(
+            prepared, output_path, overwrite_zero_s_nom
         )
-        warnings = list(prepared.warnings) + warnings
     except FileNotFoundError:
         return {"status": "error", "message": f"File not found: {file_path}"}
+    except powerio.PowerIOError as exc:
+        return powerio_error_response(exc, prefix="Failed to import case")
     except Exception as e:
         return {"status": "error", "message": f"Failed to import case: {str(e)}"}
     return {
@@ -850,8 +879,7 @@ def import_case_from_any(
         "message": f"Network imported and saved to {output_path}",
         "network_file": output_path,
         "info": info,
-        "warnings": warnings,
-        **({"package": prepared.package} if prepared.package is not None else {}),
+        "diagnostics": diagnostics,
     }
 
 
@@ -860,47 +888,40 @@ def import_case_from_json(
     network_json: str,
     output_path: str,
     overwrite_zero_s_nom: Optional[float] = None,
-    operating_point: Optional[int] = None,
-    study_commit: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Import PowerIO model JSON or one selected ``.pio.json`` package state
+    """Import PowerIO model JSON or a stored static ``.pio.json`` module
     as a PyPSA network saved to a NetCDF file.
 
     Accepts the `json` string returned by the powerio server's parse tool,
-    or a durable package emitted by its package tools. A package containing
-    stored state data requires exactly one operating-point or study-commit selector. A
-    case parsed once there loads here without passing a file around or
-    re-parsing it. Model JSON expects source-valued tables (MW, degrees)
-    as parse emits them, not the per-unit normalize form. Writes the
-    network to output_path (use a .nc extension); pass that path as
-    network_name to the other tools. powerio is a core dependency, so this is
-    always available.
+    or a stored module emitted by PowerIO. Collection modules must be exported
+    to a static module through PowerIO first. A case parsed once there loads
+    here without passing a file around or re-parsing it. Model JSON expects
+    source-valued tables (MW, degrees) as parse emits them, not the per-unit
+    form returned by `to_normalized`. Writes the network to output_path (use a
+    .nc extension);
+    pass that path as network_name to the other tools. powerio is a core
+    dependency, so this is always available.
 
     Args:
         network_json: The JSON transport string from powerio
         output_path: Where to save the imported network (.nc)
         overwrite_zero_s_nom: Replacement s_nom for branches with rating 0
-        operating_point: Optional package operating-point index to materialize
-        study_commit: Optional package study-commit index to materialize
 
     Returns:
         Dict with status, the saved network_file path, component counts, and
-        warnings about dropped or adjusted data
+        structured diagnostics for dropped or adjusted data
     """
     try:
         output_path = checked_path(output_path, purpose="output_path", for_write=True)
     except PathNotAllowed as exc:
         return {"status": "error", "message": str(exc)}
     try:
-        prepared = resolve_solver_case(
-            network_json=network_json,
-            operating_point=operating_point,
-            study_commit=study_commit,
+        prepared = resolve_solver_case(network_json=network_json)
+        info, diagnostics = _import_case_to_netcdf(
+            prepared, output_path, overwrite_zero_s_nom
         )
-        info, warnings = _import_case_to_netcdf(
-            prepared.network, output_path, overwrite_zero_s_nom
-        )
-        warnings = list(prepared.warnings) + warnings
+    except powerio.PowerIOError as exc:
+        return powerio_error_response(exc, prefix="Failed to import case")
     except Exception as e:
         return {"status": "error", "message": f"Failed to import case: {str(e)}"}
     return {
@@ -908,8 +929,7 @@ def import_case_from_json(
         "message": f"Network imported and saved to {output_path}",
         "network_file": output_path,
         "info": info,
-        "warnings": warnings,
-        **({"package": prepared.package} if prepared.package is not None else {}),
+        "diagnostics": diagnostics,
     }
 
 

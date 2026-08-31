@@ -11,7 +11,7 @@ build-backend = "hatchling.build"
 [project]
 name = "powermcp"
 version = "0.3.0"
-description = "MCP servers for power-system software (PowerWorld, OpenDSS, PSS/E, pandapower, PyPSA, and more)"
+description = "MCP servers for PowerIO, Tellegen, pandapower, PyPSA, and other power system tools"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
@@ -44,12 +44,12 @@ dependencies = [
     # imports the latter, so the floor tracks that, not just powerio's own
     # [mcp] extra requirement (mcp>=2,<3).
     "mcp>=2,<3",
-    # powerio supplies the conversion server, package model, native solver
-    # writers, shared JSON transports, and path policy used by the bridges.
-    # PowerMCP uses APIs introduced in powerio 0.9.0.
+    # powerio supplies the conversion server, module model, native solver
+    # writers, structured diagnostics, and path policy used by the bridges.
+    # PowerMCP uses the final 1.0 module and MCP APIs.
     # powerio ships the server itself (`python -m powerio.mcp`), so this repo
     # bundles no copy of it and `powermcp run powerio` runs powerio's.
-    "powerio[mcp,matrix]>=0.9.0,<1",
+    "powerio[mcp,matrix]>=1.0.0,<2",
     # CLI / installer toolkit:
     # packaging: the doctor compares an installed version against the floor
     # declared right here, so it has to read a version specifier.
@@ -75,6 +75,8 @@ hope       = ["PyYAML>=6.0"]
 # already arrive with the core install via pandapower, so the extra exists to
 # make the dependency explicit rather than to add anything new.
 genx       = ["matplotlib>=3.7", "pandas>=2.0,<3"]
+# PowerMCP ships the adapter. Build and configure the Rust CLI separately.
+tellegen   = ["jsonschema>=4,<5"]
 # powerio moved to core `dependencies`; the extra is gone (a bare
 # `pip install powermcp` now always provides the conversion server).
 # --- closed-source / vendor tool engines ---
@@ -103,7 +105,7 @@ powerfactory = ["numpy>=1.26", "matplotlib>=3.8", "pandas>=1.5"]  # vendor `powe
 # powermcp[plexosdb]` until that's resolved upstream.
 plexosdb   = ["r2x-plexos>=0.3.0", "r2x-plexos-to-sienna>=0.1.0", "r2x-sienna>=0.4.0"]
 # --- convenience groups ---
-opensource = ["powermcp[andes]", "powermcp[egret]", "powermcp[opendss]", "powermcp[ltspice]", "powermcp[surge]", "powermcp[hope]", "powermcp[genx]"]
+opensource = ["powermcp[andes]", "powermcp[egret]", "powermcp[opendss]", "powermcp[ltspice]", "powermcp[surge]", "powermcp[hope]", "powermcp[genx]", "powermcp[tellegen]"]
 windows    = ["powermcp[pscad-windows]", "powermcp[powerworld]", "powermcp[powerfactory]", "powermcp[psse]", "powermcp[pslf]"]
 all        = ["powermcp[opensource]", "powermcp[powerworld]", "powermcp[powerfactory]", "powermcp[pscad-windows]", "powermcp[psse]", "powermcp[pslf]", "powermcp[plexosdb]"]
 
@@ -138,6 +140,7 @@ packages = ["powermcp"]
 "PowerFactory" = "powermcp/_servers/PowerFactory"
 "LTSpice"      = "powermcp/_servers/LTSpice"
 "PLEXOSDB"     = "powermcp/_servers/PLEXOSDB"
+"tellegen"     = "powermcp/_servers/tellegen"
 
 # The sdist must contain the server dirs at the repo root so that the
 # build-wheel-from-sdist step (used by `python -m build`) can force-include them.
@@ -146,10 +149,11 @@ include = [
     "powermcp",
     "pandapower", "PyPSA", "ANDES", "Egret", "surge", "OpenDSS", "HOPE",
     "PSCAD", "PSSE", "PSLF", "PowerWorld", "PowerFactory", "LTSpice", "PLEXOSDB",
-    "GenX",
+    "GenX", "tellegen",
     "README.md", "LICENSE", "pyproject.toml",
 ]
 exclude = [
     "**/__pycache__", "**/*.py[cod]", "**/.pytest_cache",
+    ".venv*", "**/.venv*", ".uv-build-cache", "**/.uv-build-cache",
     "PSCAD/tests", "HOPE/tests", "PLEXOSDB/tests",
 ]
