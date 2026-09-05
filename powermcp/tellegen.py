@@ -35,13 +35,23 @@ async def _call(arguments: list[str], request: Any = None) -> Any:
         _binary(), *arguments, stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
     )
+    communication = asyncio.create_task(process.communicate(data))
     try:
-        stdout, stderr = await asyncio.wait_for(process.communicate(data), timeout=300)
-    except (asyncio.TimeoutError, asyncio.CancelledError):
+        stdout, stderr = await asyncio.wait_for(asyncio.shield(communication), timeout=300)
+    except (asyncio.TimeoutError, asyncio.CancelledError) as stopped:
         if process.returncode is None:
-            process.kill()
-        await process.wait()
-        raise RuntimeError("Tellegen execution stopped. Inspect the saved Study revision before retrying; a completed atomic save may already exist. A remaining .lock requires checking that its writer exited.") from None
+            process.terminate()
+        try:
+            await asyncio.wait_for(asyncio.shield(communication), timeout=30)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            if process.returncode is None:
+                process.kill()
+            await process.wait()
+            communication.cancel()
+            await asyncio.gather(communication, return_exceptions=True)
+        if isinstance(stopped, asyncio.CancelledError):
+            raise
+        raise RuntimeError("Tellegen execution timed out. Cancellation allows the current trial to finish and saves completed planning evidence. Inspect the saved Study revision before retrying; a forced stop after 30 seconds may leave the previous revision. A remaining .lock requires checking that its writer exited.") from None
     if process.returncode:
         raise RuntimeError(stderr.decode(errors="replace")[:2048] or "Tellegen failed without a diagnostic")
     return json.loads(stdout)

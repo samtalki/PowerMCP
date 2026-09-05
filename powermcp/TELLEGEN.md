@@ -22,8 +22,10 @@ Tellegen Study panel or use `study_import` to create another filesystem copy.
 Imported documents never restore approvals.
 
 Native operations save atomically and refuse stale revisions. If the process is
-cancelled or times out, inspect the saved revision before retrying: a completed
-save may exist. A lock left by a terminated writer requires verifying that the
+cancelled or times out, the adapter requests termination and allows 30 seconds
+for the current exact trial to finish and the cancelled planning record to save.
+Inspect the saved revision before retrying. If that grace period expires, the
+adapter kills the process and completed unsaved trials can be lost. A lock left by a terminated writer requires verifying that the
 writer has exited before removing the lock. Configure a bounded solve budget to
 keep operations within the five-minute process deadline.
 
