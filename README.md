@@ -168,9 +168,8 @@ context key for adapter compatibility; its contents identify the IR generation,
 producer, value type and explicit selection.
 
 Use `emit` for a backend that needs files. OpenDSS output is a directory bundle;
-compile its returned master DSS artifact. Explicit BMOPF profile names are
-`bmopf-json@0.1.0` and `bmopf-json@0.2.0`. The latter identifies a pinned proposal
-and does not claim Task Force ratification.
+compile its returned master DSS artifact. Select BMOPF output versions with
+`bmopf-json@0.1.0` and `bmopf-json@0.2.0`. The latter writes draft BMOPF 0.2, subject to Task Force approval.
 
 
 PowerIO MCP paths support local files and `file://` URIs. Set

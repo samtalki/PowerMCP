@@ -21,7 +21,8 @@ def test_paths_checked_before_native_execution(tmp_path, monkeypatch):
         asyncio.run(tellegen.study_inspect(str(tmp_path.parent / "outside.json")))
 
 
-def test_mutation_keeps_revision_binding_and_returns_compact_result(tmp_path, monkeypatch):
+@pytest.mark.parametrize("kind", ["propose", "edit_demand", "restore_base"])
+def test_mutation_keeps_revision_binding_and_returns_compact_result(tmp_path, monkeypatch, kind):
     path = tmp_path / "study.json"
     path.write_text("{}")
     received = []
@@ -29,7 +30,7 @@ def test_mutation_keeps_revision_binding_and_returns_compact_result(tmp_path, mo
         received.append((args, request))
         return {"summary": {"id": "s", "revision": 4, "active_goal": ["g", {"request": "lower prices", "anchor_state": "a", "objective": {"large": []}}]}, "experiment": "e", "inspected_view": {"large": []}}
     monkeypatch.setattr(tellegen, "_call", native)
-    operation = {"kind": "propose", "state": "a", "goal": "g"}
+    operation = {"kind": kind, "state": "a", "goal": "g"}
     result = asyncio.run(tellegen.study_run(str(path), 3, operation))
     assert received == [(["study", "run", str(path)], {"expected_revision": 3, "operation": operation})]
     assert result["revision"] == 4 and result["experiment"] == "e"

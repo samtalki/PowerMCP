@@ -19,7 +19,7 @@ from powermcp.sandbox import checked_path
 
 mcp = MCPServer("Tellegen Studies")
 MAX_BUNDLE_BYTES = 512 * 1024 * 1024
-OPERATIONS = frozenset({"inspect", "branch", "revise_goal", "compare", "propose", "record_evidence"})
+OPERATIONS = frozenset({"inspect", "branch", "revise_goal", "compare", "propose", "record_evidence", "edit_demand", "restore_base"})
 
 
 def _binary() -> str:
@@ -153,7 +153,7 @@ async def study_inspect(path: str, section: str = "summary", record_id: str | No
 
 @mcp.tool()
 async def study_run(path: str, expected_revision: int, operation: dict[str, Any]) -> dict[str, Any]:
-    """Inspect, branch, revise a goal, compare, propose interventions or attach evidence using the native StudyOperation schema. Proposals stay unapplied; application requires an explicit native CLI user action."""
+    """Inspect, branch, revise a goal, compare, adjust demand, restore the base case, propose interventions or attach evidence using the native StudyOperation schema. Proposals stay unapplied; application requires an explicit native CLI user action."""
     if operation.get("kind") not in OPERATIONS:
         raise ValueError("Unsupported agent operation. Apply the reviewed proposal through an explicit native CLI user action.")
     return _summary(await _call(["study", "run", _path(path, write=True)],
