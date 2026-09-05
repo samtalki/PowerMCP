@@ -4,8 +4,12 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import math
 import os
 import shutil
+import signal
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -27,22 +31,46 @@ def _binary() -> str:
     raise RuntimeError("Install the native Tellegen CLI with Study support or set POWERMCP_TELLEGEN_BINARY")
 
 
+def _seconds(key: str, default: float) -> float:
+    value = os.environ.get(f"POWERMCP_TELLEGEN_{key.upper()}", get("tellegen", key, default))
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"tellegen.{key} must be a finite positive duration") from None
+    if isinstance(value, bool) or not math.isfinite(seconds) or not 0 < seconds <= 86400:
+        raise ValueError(f"tellegen.{key} must be a duration in (0, 86400] seconds")
+    return seconds
+
+
 async def _call(arguments: list[str], request: Any = None) -> Any:
     data = b"" if request is None else json.dumps(request, allow_nan=False).encode()
     if len(data) > MAX_BUNDLE_BYTES:
         raise ValueError("Tellegen input exceeds the 512 MiB Study limit")
+    timeout = _seconds("timeout_seconds", 1800)
+    grace = _seconds("cancel_grace_seconds", 300)
+    windows = sys.platform == "win32"
+    options = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if windows else {}
     process = await asyncio.create_subprocess_exec(
         _binary(), *arguments, stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, **options,
     )
     communication = asyncio.create_task(process.communicate(data))
     try:
-        stdout, stderr = await asyncio.wait_for(asyncio.shield(communication), timeout=300)
+        stdout, stderr = await asyncio.wait_for(asyncio.shield(communication), timeout=timeout)
     except (asyncio.TimeoutError, asyncio.CancelledError) as stopped:
         if process.returncode is None:
-            process.terminate()
+            if windows:
+                try:
+                    process.send_signal(signal.CTRL_BREAK_EVENT)
+                except OSError:
+                    process.terminate()
+            else:
+                try:
+                    process.terminate()
+                except ProcessLookupError:
+                    pass
         try:
-            await asyncio.wait_for(asyncio.shield(communication), timeout=30)
+            await asyncio.wait_for(asyncio.shield(communication), timeout=grace)
         except (asyncio.TimeoutError, asyncio.CancelledError):
             if process.returncode is None:
                 process.kill()
@@ -51,7 +79,7 @@ async def _call(arguments: list[str], request: Any = None) -> Any:
             await asyncio.gather(communication, return_exceptions=True)
         if isinstance(stopped, asyncio.CancelledError):
             raise
-        raise RuntimeError("Tellegen execution timed out. Cancellation allows the current trial to finish and saves completed planning evidence. Inspect the saved Study revision before retrying; a forced stop after 30 seconds may leave the previous revision. A remaining .lock requires checking that its writer exited.") from None
+        raise RuntimeError(f"Tellegen execution timed out. Cancellation allows the current trial to finish and saves completed planning evidence. Inspect the saved Study revision before retrying; a forced stop after {grace:g} seconds may leave the previous revision. A remaining .lock requires checking that its writer exited.") from None
     if process.returncode:
         raise RuntimeError(stderr.decode(errors="replace")[:2048] or "Tellegen failed without a diagnostic")
     return json.loads(stdout)

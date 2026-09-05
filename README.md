@@ -220,3 +220,12 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ### Special Thanks
 - All contributors who help make this project better
 - [The Power and AI Initiative (PAI) at Harvard SEAS](https://pai.seas.harvard.edu/)
+
+
+The native Tellegen Study adapter accepts `POWERMCP_TELLEGEN_TIMEOUT_SECONDS`
+(default 1800) and `POWERMCP_TELLEGEN_CANCEL_GRACE_SECONDS` (default 300).
+Equivalent keys live under `[tellegen]` in the configuration file. Cancellation
+requests SIGTERM on POSIX and CTRL_BREAK on a Windows process group, allowing the
+current exact trial to finish and completed evidence to be saved. After the grace
+period, or without a usable Windows console, a forced stop can retain only the
+previous saved revision. Inspect the Study before retrying.

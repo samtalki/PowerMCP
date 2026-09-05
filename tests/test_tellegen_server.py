@@ -52,6 +52,8 @@ def test_cancellation_requests_graceful_native_save(monkeypatch):
                 saved.set()
                 self.returncode = 0
                 return b'{"revision":1}', b''
+            def send_signal(self, value):
+                terminated.set()
             def terminate(self):
                 terminated.set()
             def kill(self):
@@ -69,3 +71,10 @@ def test_cancellation_requests_graceful_native_save(monkeypatch):
             await task
         assert terminated.is_set() and saved.is_set()
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("value", [0, -1, "nan", "inf", "invalid", 86401])
+def test_invalid_execution_duration_is_rejected(value, monkeypatch):
+    monkeypatch.setenv("POWERMCP_TELLEGEN_TIMEOUT_SECONDS", str(value))
+    with pytest.raises(ValueError, match="duration"):
+        tellegen._seconds("timeout_seconds", 1800)
