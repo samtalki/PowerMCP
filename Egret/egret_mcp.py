@@ -16,7 +16,7 @@ _repo_root_added = _repo_root not in sys.path
 if _repo_root_added:
     sys.path.insert(0, _repo_root)
 try:
-    from powermcp.solver_case import resolve_solver_case
+    from powermcp.solver_case import resolve_solver_case, diagnostic_messages
     from powermcp.sandbox import PathNotAllowed, checked_path, ensure_checked_directory
 finally:
     if _repo_root_added:
@@ -250,13 +250,14 @@ def load_model_from_any(
     source_format: Optional[str] = None,
     operating_point: Optional[int] = None,
     study_commit: Optional[int] = None,
+    time_index: Optional[int] = None,
+    scenario_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Convert any powerio readable case file into an egret model.
 
-    Reads any balanced PowerIO format or a ``.pio.json`` package, converts one
+    Reads any balanced PowerIO format or a ``.pio.json`` module, converts one
     selected state to Egret JSON, validates it as ModelData, and stages it. For
-    a package containing stored state data, select operating_point or
-    study_commit. Pass the returned `case_file` path to solve_ac_opf, solve_dc_opf, or
+    a TimeSeries, select time_index; for a ScenarioSet, select scenario_id. Pass the returned `case_file` path to solve_ac_opf, solve_dc_opf, or
     solve_unit_commitment_problem. powerio is a core dependency, so this is
     always available.
 
@@ -265,8 +266,10 @@ def load_model_from_any(
         source_format: Input format name (matpower, powermodels-json,
             egret-json, psse, powerworld); inferred from the file extension
             when omitted
-        operating_point: Optional package operating-point index to materialize
-        study_commit: Optional package study-commit index to materialize
+        operating_point: Compatibility alias for time_index
+        study_commit: Retired package selector; export a Tellegen Study state as IR
+        time_index: Explicit TimeSeries index
+        scenario_id: Explicit ScenarioSet identifier
 
     Returns:
         Dict with status, the staged `case_file` path, model element counts,
@@ -282,8 +285,10 @@ def load_model_from_any(
             source_format=source_format,
             operating_point=operating_point,
             study_commit=study_commit,
+            time_index=time_index,
+            scenario_id=scenario_id,
         )
-        conv = prepared.network.to_format("egret-json")
+        conv = prepared.emit("egret-json")
         path, info = _stage_egret_model(conv.text)
     except FileNotFoundError:
         return {"status": "error", "message": f"File not found: {file_path}"}
@@ -293,7 +298,7 @@ def load_model_from_any(
         "status": "success",
         "case_file": path,
         "model_info": info,
-        "warnings": list(prepared.warnings) + list(conv.warnings),
+        "warnings": list(prepared.warnings) + list(diagnostic_messages(conv.diagnostics)),
         **({"package": prepared.package} if prepared.package is not None else {}),
     }
 
@@ -303,8 +308,10 @@ def load_model_from_json(
     network_json: str,
     operating_point: Optional[int] = None,
     study_commit: Optional[int] = None,
+    time_index: Optional[int] = None,
+    scenario_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Convert PowerIO model JSON or one package state into an Egret model.
+    """Convert a selected PowerIO IR module into an Egret model.
 
     Accepts the `json` string returned by the powerio server's parse tool,
     so a case parsed once there feeds egret without re-reading the file.
@@ -315,8 +322,10 @@ def load_model_from_json(
 
     Args:
         network_json: The JSON transport string from powerio
-        operating_point: Optional package operating-point index to materialize
-        study_commit: Optional package study-commit index to materialize
+        operating_point: Compatibility alias for time_index
+        study_commit: Retired package selector; export a Tellegen Study state as IR
+        time_index: Explicit TimeSeries index
+        scenario_id: Explicit ScenarioSet identifier
 
     Returns:
         Dict with status, the staged `case_file` path, model element counts,
@@ -327,8 +336,10 @@ def load_model_from_json(
             network_json=network_json,
             operating_point=operating_point,
             study_commit=study_commit,
+            time_index=time_index,
+            scenario_id=scenario_id,
         )
-        conv = prepared.network.to_format("egret-json")
+        conv = prepared.emit("egret-json")
         path, info = _stage_egret_model(conv.text)
     except Exception as e:
         return {"status": "error", "message": str(e)}
@@ -336,7 +347,7 @@ def load_model_from_json(
         "status": "success",
         "case_file": path,
         "model_info": info,
-        "warnings": list(prepared.warnings) + list(conv.warnings),
+        "warnings": list(prepared.warnings) + list(diagnostic_messages(conv.diagnostics)),
         **({"package": prepared.package} if prepared.package is not None else {}),
     }
 

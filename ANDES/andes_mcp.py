@@ -16,7 +16,7 @@ _repo_root_added = _repo_root not in sys.path
 if _repo_root_added:
     sys.path.insert(0, _repo_root)
 try:
-    from powermcp.solver_case import resolve_solver_case
+    from powermcp.solver_case import resolve_solver_case, diagnostic_messages
     from powermcp.sandbox import (
         PathNotAllowed,
         checked_path,
@@ -497,8 +497,10 @@ def load_network_from_json(
     out_path: str,
     operating_point: Optional[int] = None,
     study_commit: Optional[int] = None,
+    time_index: Optional[int] = None,
+    scenario_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Stage PowerIO model JSON or one package state as MATPOWER for ANDES.
+    """Stage a selected PowerIO IR module as MATPOWER for ANDES.
 
     Accepts the ``json`` string returned by the powerio server's parse tool.
     Converts the network to MATPOWER format, writes it to out_path (use a .m
@@ -509,8 +511,10 @@ def load_network_from_json(
     Args:
         network_json: The JSON transport string from powerio
         out_path: Destination for the MATPOWER case file (.m)
-        operating_point: Optional package operating-point index to materialize
-        study_commit: Optional package study-commit index to materialize
+        operating_point: Compatibility alias for time_index
+        study_commit: Retired package selector; export a Tellegen Study state as IR
+        time_index: Explicit TimeSeries index
+        scenario_id: Explicit ScenarioSet identifier
 
     Returns:
         Dict with status, case_file path, component counts, and fidelity warnings
@@ -524,9 +528,11 @@ def load_network_from_json(
             network_json=network_json,
             operating_point=operating_point,
             study_commit=study_commit,
+            time_index=time_index,
+            scenario_id=scenario_id,
         )
         case = prepared.network
-        conv = case.to_format("matpower")
+        conv = prepared.emit("matpower")
         abs_out = os.path.abspath(out_path)
         with open(abs_out, "w") as fh:
             fh.write(conv.text)
@@ -541,7 +547,7 @@ def load_network_from_json(
             "branches": case.n_branches,
             "generators": case.n_gens,
         },
-        "warnings": list(prepared.warnings) + list(conv.warnings),
+        "warnings": list(prepared.warnings) + list(diagnostic_messages(conv.diagnostics)),
         **({"package": prepared.package} if prepared.package is not None else {}),
     }
 
@@ -553,6 +559,8 @@ def load_network_from_any(
     source_format: Optional[str] = None,
     operating_point: Optional[int] = None,
     study_commit: Optional[int] = None,
+    time_index: Optional[int] = None,
+    scenario_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Stage any powerio readable case as a MATPOWER file for ANDES.
 
@@ -566,8 +574,10 @@ def load_network_from_any(
         out_path: Destination for the MATPOWER case file (.m)
         source_format: Input format name (matpower, powermodels-json, egret-json,
             psse, powerworld); inferred from the file extension when omitted
-        operating_point: Optional package operating-point index to materialize
-        study_commit: Optional package study-commit index to materialize
+        operating_point: Compatibility alias for time_index
+        study_commit: Retired package selector; export a Tellegen Study state as IR
+        time_index: Explicit TimeSeries index
+        scenario_id: Explicit ScenarioSet identifier
 
     Returns:
         Dict with status, case_file path, component counts, and fidelity warnings
@@ -586,9 +596,11 @@ def load_network_from_any(
             source_format=source_format,
             operating_point=operating_point,
             study_commit=study_commit,
+            time_index=time_index,
+            scenario_id=scenario_id,
         )
         case = prepared.network
-        conv = case.to_format("matpower")
+        conv = prepared.emit("matpower")
         abs_out = os.path.abspath(out_path)
         with open(abs_out, "w") as fh:
             fh.write(conv.text)
@@ -605,7 +617,7 @@ def load_network_from_any(
             "branches": case.n_branches,
             "generators": case.n_gens,
         },
-        "warnings": list(prepared.warnings) + list(conv.warnings),
+        "warnings": list(prepared.warnings) + list(diagnostic_messages(conv.diagnostics)),
         **({"package": prepared.package} if prepared.package is not None else {}),
     }
 

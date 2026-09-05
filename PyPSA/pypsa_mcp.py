@@ -13,7 +13,7 @@ _repo_root_added = _repo_root not in sys.path
 if _repo_root_added:
     sys.path.insert(0, _repo_root)
 try:
-    from powermcp.solver_case import resolve_solver_case
+    from powermcp.solver_case import resolve_solver_case, diagnostic_messages
     from powermcp.sandbox import (
         PathNotAllowed,
         checked_path,
@@ -705,15 +705,15 @@ def export_to_csv_folder(network_name: str, folder_path: str) -> Dict[str, Any]:
 
 def _import_case_to_netcdf(case, output_path: str, overwrite_zero_s_nom: Optional[float]):
     """Use PowerIO's native PyPSA CSV writer, then persist the network."""
-    with tempfile.TemporaryDirectory(prefix="powermcp-pypsa-") as staging:
-        written = case.write_pypsa_csv_folder(staging)
+    with tempfile.TemporaryDirectory(prefix="powermcp-pypsa-") as staging_root:
+        staging = os.path.join(staging_root, "case")
+        written = case.emit("pypsa-csv", staging)
         network = Network()
         network.import_from_csv_folder(staging)
-    warnings = list(written.get("warnings", []))
+    warnings = list(diagnostic_messages(written.diagnostics))
 
-    # PowerIO 0.9 preserves source generator voltage targets in its native
-    # generators.csv extension column.  PyPSA imports that column but regulates
-    # voltage through Bus.v_mag_pu_set, so apply it explicitly before solving.
+    # PyPSA regulates bus voltage through Bus.v_mag_pu_set; transfer the
+    # generator targets retained by the PowerIO CSV writer before solving.
     if "v_mag_pu_set" in network.generators:
         generators = network.generators
         regulated = generators.loc[
@@ -732,9 +732,9 @@ def _import_case_to_netcdf(case, output_path: str, overwrite_zero_s_nom: Optiona
                     f"using {target} from the first generator"
                 )
 
-    # The 0.9 CSV writer emits generators in canonical source order.  Restore
-    # transition costs that PyPSA supports but the writer does not yet emit.
-    source_generators = list(case.generators)
+    # Generator rows retain source order. Map supported transition costs
+    # into the PyPSA generator table.
+    source_generators = list(case.network.generators)
     if len(source_generators) == len(network.generators):
         network.generators["start_up_cost"] = [
             float((generator.get("cost") or {}).get("startup", 0.0))
@@ -798,14 +798,15 @@ def import_case_from_any(
     overwrite_zero_s_nom: Optional[float] = None,
     operating_point: Optional[int] = None,
     study_commit: Optional[int] = None,
+    time_index: Optional[int] = None,
+    scenario_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Import any powerio readable case file as a PyPSA network saved to a
     NetCDF file.
 
-    Reads any balanced PowerIO format or a ``.pio.json`` package and writes a
-    PyPSA network to output_path. If the package contains stored state data,
-    select exactly one operating_point or study_commit; PowerIO materializes it
-    first.
+    Reads any balanced PowerIO format or a ``.pio.json`` module and writes a
+    PyPSA network to output_path. Select a TimeSeries with time_index and a ScenarioSet with scenario_id.
+    The selected typed value is validated before conversion.
     PowerIO's native PyPSA writer preserves supported costs and element status.
 
     Args:
@@ -815,8 +816,10 @@ def import_case_from_any(
             egret-json, psse, powerworld); inferred from the file extension
             when omitted
         overwrite_zero_s_nom: Replacement s_nom for branches with rating 0
-        operating_point: Optional package operating-point index to materialize
-        study_commit: Optional package study-commit index to materialize
+        operating_point: Compatibility alias for time_index
+        study_commit: Retired package selector; export a Tellegen Study state as IR
+        time_index: Explicit TimeSeries index
+        scenario_id: Explicit ScenarioSet identifier
 
     Returns:
         Dict with status, the saved network_file path, component counts, and
@@ -836,9 +839,11 @@ def import_case_from_any(
             source_format=source_format,
             operating_point=operating_point,
             study_commit=study_commit,
+            time_index=time_index,
+            scenario_id=scenario_id,
         )
         info, warnings = _import_case_to_netcdf(
-            prepared.network, output_path, overwrite_zero_s_nom
+            prepared, output_path, overwrite_zero_s_nom
         )
         warnings = list(prepared.warnings) + warnings
     except FileNotFoundError:
@@ -862,8 +867,10 @@ def import_case_from_json(
     overwrite_zero_s_nom: Optional[float] = None,
     operating_point: Optional[int] = None,
     study_commit: Optional[int] = None,
+    time_index: Optional[int] = None,
+    scenario_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Import PowerIO model JSON or one selected ``.pio.json`` package state
+    """Import PowerIO model JSON or one selected ``.pio.json`` module state
     as a PyPSA network saved to a NetCDF file.
 
     Accepts the `json` string returned by the powerio server's parse tool,
@@ -880,8 +887,10 @@ def import_case_from_json(
         network_json: The JSON transport string from powerio
         output_path: Where to save the imported network (.nc)
         overwrite_zero_s_nom: Replacement s_nom for branches with rating 0
-        operating_point: Optional package operating-point index to materialize
-        study_commit: Optional package study-commit index to materialize
+        operating_point: Compatibility alias for time_index
+        study_commit: Retired package selector; export a Tellegen Study state as IR
+        time_index: Explicit TimeSeries index
+        scenario_id: Explicit ScenarioSet identifier
 
     Returns:
         Dict with status, the saved network_file path, component counts, and
@@ -896,9 +905,11 @@ def import_case_from_json(
             network_json=network_json,
             operating_point=operating_point,
             study_commit=study_commit,
+            time_index=time_index,
+            scenario_id=scenario_id,
         )
         info, warnings = _import_case_to_netcdf(
-            prepared.network, output_path, overwrite_zero_s_nom
+            prepared, output_path, overwrite_zero_s_nom
         )
         warnings = list(prepared.warnings) + warnings
     except Exception as e:

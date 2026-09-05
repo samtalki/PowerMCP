@@ -298,6 +298,7 @@ def test_staged_directory_write_preserves_unrelated_files(tmp_path):
     (output / "buses.csv").write_text("old")
 
     def write(staging):
+        pathlib.Path(staging).mkdir()
         path = pathlib.Path(staging) / "buses.csv"
         path.write_text("new")
         return {"dir": staging, "files": [str(path)]}
