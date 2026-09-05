@@ -151,7 +151,14 @@ TOOLS: dict[str, "Tool"] = {
             "powerio", "PowerIO", "open-source", windows_only=False, extra=None,
             server_dir=None, run_kind="package", module="powerio.mcp",
             probe="powerio",
-            notes="Format-neutral conversion, matrices, and auditable .pio.json packages. Its canonical MCP server owns package operations; pandapower, PyPSA, Egret, and ANDES resolve package states only when importing into a solver.",
+            notes="Format-neutral conversion, matrices, and auditable PowerIO IR modules. Its canonical MCP server owns module operations; pandapower, PyPSA, Egret, and ANDES resolve selected module states only when importing into a solver.",
+        ),
+        Tool(
+            "tellegen", "Tellegen Studies", "open-source", windows_only=False, extra="tellegen",
+            server_dir=None, run_kind="package", module="powermcp.tellegen", probe="mcp",
+            config_keys=(ConfigKey("binary", "Path to the native Tellegen CLI", "file", required=False),),
+            external_solvers=("Tellegen native CLI",),
+            notes="Persistent goals, branching studies, implicit gradients and exact proposals through the native CLI. Configure POWERMCP_TELLEGEN_BINARY or install tellegen on PATH.",
         ),
         # ---- CLOSED-SOURCE / VENDOR ----
         Tool(

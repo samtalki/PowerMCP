@@ -64,6 +64,7 @@ dependencies = [
 
 [project.optional-dependencies]
 # --- open-source tool engines ---
+tellegen   = []  # Native CLI is installed separately.
 andes      = ["andes"]
 egret      = ["gridx-egret", "pyomo"]          # PyPI dist is `gridx-egret`; imports as `egret`
 opendss    = ["py_dss_toolkit"]
