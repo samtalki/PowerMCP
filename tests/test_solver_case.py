@@ -160,6 +160,58 @@ def test_typed_edits_apply_before_the_solver_sees_the_network():
     assert resolve_solver_case(file_path=str(CASE9)).network.loads[0]["p"] == pytest.approx(base.loads[0]["p"])
 
 
+def two_loads_on_one_bus():
+    """case9 with its first demand split into two 25 MW loads on the same bus."""
+    document = json.loads(ir(powerio.parse(CASE9)))
+    loads = document["value"]["data"]["loads"]
+    shared = dict(loads[0])
+    document["value"]["data"]["loads"] = [
+        {**shared, "p": 25.0, "uid": "load-A"},
+        {**shared, "p": 25.0, "uid": "load-B"},
+        *loads[1:],
+    ]
+    document["value"]["data"]["generated_uids"] = []
+    return json.dumps(document), shared["bus"]
+
+
+def test_edits_apply_in_the_order_the_caller_listed_them():
+    payload, bus = two_loads_on_one_bus()
+    reallocate = {"op": "set_bus_load_active_power", "bus": bus, "mw": 50.0,
+                  "allocation": "proportional_to_current_active_power"}
+    set_load_a = {"op": "set_load_active_power", "load": "load-A", "mw": 10.0}
+
+    # The reallocation runs first and the direct edit states the final value.
+    resolved = resolve_solver_case(powerio_ir=payload, edits=json.dumps([reallocate, set_load_a]))
+    assert resolved.network.loads[0]["p"] == pytest.approx(10.0)
+    assert resolved.network.loads[1]["p"] == pytest.approx(25.0)
+    assert [(change["local_id"], change["field"]) for change in resolved.edits["changes"]] == [
+        ("load-A", "load_active_power"),
+    ]
+
+    # Reversed, the reallocation sees 10 and 25 MW and splits 50 MW over them.
+    resolved = resolve_solver_case(powerio_ir=payload, edits=json.dumps([set_load_a, reallocate]))
+    assert resolved.network.loads[0]["p"] == pytest.approx(50.0 * 10.0 / 35.0)
+    assert resolved.network.loads[1]["p"] == pytest.approx(50.0 * 25.0 / 35.0)
+    assert [change["local_id"] for change in resolved.edits["changes"]] == ["load-A", "load-A", "load-B"]
+
+
+def test_consecutive_updates_of_one_class_are_one_batch_in_list_order():
+    payload, _ = two_loads_on_one_bus()
+    edits = json.dumps([
+        {"op": "set_load_active_power", "load": "load-A", "mw": 10.0},
+        {"op": "set_load_active_power", "load": "load-B", "mw": 40.0},
+        {"op": "set_branch_thermal_rating", "branch": "1-4", "mva": 123.0},
+        {"op": "set_load_active_power", "load": "load-A", "mw": 5.0},
+    ])
+    resolved = resolve_solver_case(powerio_ir=payload, edits=edits)
+    assert resolved.network.loads[0]["p"] == pytest.approx(5.0)
+    assert resolved.network.loads[1]["p"] == pytest.approx(40.0)
+    assert resolved.network.branches[0]["rate_a"] == pytest.approx(123.0)
+    assert [(change["component_type"], change["local_id"]) for change in resolved.edits["changes"]] == [
+        ("load", "load-A"), ("load", "load-B"), ("branch", "1-4"), ("load", "load-A"),
+    ]
+
+
 def test_edits_are_validated_as_a_whole_before_anything_applies():
     base = powerio.parse(CASE9).value
     load_id = base.loads[0].get("uid") or "loads:0"

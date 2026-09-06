@@ -4,9 +4,9 @@ PowerIO owns parsing, IR validation, transformations, typed updates and format
 emission. PowerMCP routes a declared PowerIO value to the solver that accepts
 it: the caller names the collection entry, asks for the multiconductor to
 balanced transformation explicitly, and states any what-if edit as a typed
-update PowerIO validates and applies atomically before the solver sees the
-network. Nothing here re-parses, re-validates, or recomputes what PowerIO
-already states.
+update PowerIO validates and applies, in the caller's order, before the solver
+sees the network. Nothing here re-parses, re-validates, or recomputes what
+PowerIO already states.
 """
 from __future__ import annotations
 
@@ -240,24 +240,33 @@ def _typed_value(kind: str, edit: dict[str, Any], key: str, position: int) -> An
     return _number(edit, key, position)
 
 
-def _build_updates(edits: list[dict[str, Any]]):
-    """Validate every edit first, then build the typed updates in three groups."""
-    operating: list[Any] = []
-    network: list[Any] = []
-    bus_loads: list[tuple[int, Any, str]] = []
+def _build_updates(edits: list[dict[str, Any]]) -> list[tuple[str, Any]]:
+    """Validate every edit first, then build the typed updates as ordered steps.
+
+    A step is one run of consecutive edits of a single update class, or one bus
+    demand reallocation, which PowerIO applies on its own at the calculation
+    level. The steps keep the caller's list order, so a later edit states the
+    value that stands after the edits before it.
+    """
+    steps: list[tuple[str, Any]] = []
     for position, edit in enumerate(edits):
         op = edit.get("op")
         if op in _OPERATING_POINT_OPS or op in _NETWORK_OPS:
-            table = _OPERATING_POINT_OPS if op in _OPERATING_POINT_OPS else _NETWORK_OPS
+            operating = op in _OPERATING_POINT_OPS
+            table = _OPERATING_POINT_OPS if operating else _NETWORK_OPS
             constructor, component_type, values, takes_terminal = table[op]
             identity = _identity(edit, component_type, position)
             args = [_typed_value(kind, edit, key, position) for key, kind in values]
             kwargs = {}
             if takes_terminal and edit.get("terminal") is not None:
                 kwargs["terminal"] = str(edit["terminal"])
-            klass = powerio.OperatingPointUpdate if op in _OPERATING_POINT_OPS else powerio.NetworkUpdate
+            klass = powerio.OperatingPointUpdate if operating else powerio.NetworkUpdate
             update = getattr(klass, constructor)(identity, *args, **kwargs)
-            (operating if op in _OPERATING_POINT_OPS else network).append(update)
+            step = "operating" if operating else "network"
+            if steps and steps[-1][0] == step:
+                steps[-1][1].append(update)
+            else:
+                steps.append((step, [update]))
         elif op == _BUS_LOAD_OP:
             bus = edit.get("bus")
             if isinstance(bus, bool) or not isinstance(bus, int):
@@ -265,10 +274,11 @@ def _build_updates(edits: list[dict[str, Any]]):
             allocation = edit.get("allocation", _ALLOCATIONS[0])
             if allocation not in _ALLOCATIONS:
                 raise ValueError(f"edit #{position}: 'allocation' must be one of {list(_ALLOCATIONS)}")
-            bus_loads.append((bus, powerio.ActivePower.megawatts(_number(edit, "mw", position)), allocation))
+            total = powerio.ActivePower.megawatts(_number(edit, "mw", position))
+            steps.append(("bus_load", (bus, total, allocation)))
         else:
             raise ValueError(f"edit #{position}: unknown op {op!r}; expected one of {list(EDIT_OPS)}")
-    return operating, network, bus_loads
+    return steps
 
 
 def _report_payload(reports: list[Any]) -> dict[str, Any]:
@@ -293,17 +303,19 @@ def apply_edits(
 ) -> tuple[powerio.PioModule, dict[str, Any] | None]:
     """Apply the edit vocabulary to a module with PowerIO's typed updates.
 
-    The whole list is validated before anything is applied. Operating point
-    updates and network updates each go through one atomic ``apply_updates``
-    batch on the module. A bus demand allocation is a calculation level
-    operation in PowerIO, so it runs on a DC power flow instance built from
-    the network and the edited network comes back as a fresh module. Returns
-    the module to continue with and the merged report, or ``None`` for an
-    empty list.
+    The whole list is validated before anything is applied, and the edits then
+    apply in the caller's list order. Consecutive updates of one class go
+    through one atomic ``apply_updates`` batch on the module; each bus demand
+    reallocation is its own step and therefore sees the values the edits before
+    it produced. A bus demand allocation is a calculation level operation in
+    PowerIO, so it runs on a DC power flow instance built from the network at
+    that point and the edited network comes back as a fresh module. Returns the
+    module to continue with and the merged report, whose changes follow
+    application order, or ``None`` for an empty list.
     """
     if not edits:
         return module, None
-    operating, network, bus_loads = _build_updates(edits)
+    steps = _build_updates(edits)
     value = module.value
     wrap = None
     if isinstance(value, powerio.BalancedNetwork):
@@ -318,16 +330,16 @@ def apply_edits(
         )
     reports = []
     try:
-        for batch in (operating, network):
-            if batch:
-                updates = [wrap(update) for update in batch] if wrap else batch
-                reports.append(powerio.apply_updates(module, updates))
-        if bus_loads:
-            target = module if wrap else module.to_dc_pf_instance()
-            for bus, total, allocation in bus_loads:
+        for step, payload in steps:
+            if step == "bus_load":
+                bus, total, allocation = payload
+                target = module if wrap else module.to_dc_pf_instance()
                 reports.append(powerio.apply_bus_load_active_power(target, bus, total, allocation=allocation))
-            if not wrap:
-                module = powerio.PioModule.from_value(target.value.network)
+                if not wrap:
+                    module = powerio.PioModule.from_value(target.value.network)
+            else:
+                updates = [wrap(update) for update in payload] if wrap else payload
+                reports.append(powerio.apply_updates(module, updates))
     except (powerio.PowerIOError, TypeError) as exc:
         code = getattr(exc, "code", None)
         prefix = f"{code}: " if code else ""
