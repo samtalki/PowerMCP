@@ -92,6 +92,8 @@ import powerio
 
 FAKE = Path(__file__).parent / "data" / "fake_tellegen.py"
 CASE9 = Path(__file__).parent / "data" / "case9.m"
+DIST = Path(__file__).parent / "data" / "opendss" / "fourwire_linecode.dss"
+UNRESOLVED = Path(__file__).parent / "data" / "opendss" / "geometry_unresolved.dss"
 
 
 @pytest.fixture
@@ -145,6 +147,56 @@ def test_solve_hands_generation_two_ir_to_the_binary(fake_binary):
     module = json.loads(call["stdin"])
     assert module["schema"] == "pio-ir" and module["version"] == 2
     assert module["value"]["type"] == "powerio.BalancedNetwork"
+
+
+def test_multiconductor_input_fails_before_the_native_process(fake_binary, tmp_path):
+    """PowerMCP names the missing lowering instead of a subprocess diagnostic."""
+    study = tmp_path / "study.json"
+    for call in (
+        lambda: tellegen.solve(path=str(DIST)),
+        lambda: tellegen.solve_module(path=str(DIST)),
+        lambda: tellegen.plan(json.dumps({"budget_mw": 1}), path=str(DIST)),
+        lambda: tellegen.study_create(str(study), {"id": "s1", "request": "r"}, input_path=str(DIST)),
+    ):
+        with pytest.raises(ValueError, match="balanced network or a calculation instance"):
+            asyncio.run(call())
+    assert fake_binary() == []
+    assert not study.exists()
+
+
+def test_an_error_diagnostic_is_refused_before_the_native_process(fake_binary, tmp_path):
+    """A module PowerIO marks with an error severity never reaches the binary."""
+    study = tmp_path / "study.json"
+    for call in (
+        lambda: tellegen.solve(path=str(UNRESOLVED)),
+        lambda: tellegen.solve_module(path=str(UNRESOLVED)),
+        lambda: tellegen.plan(json.dumps({"budget_mw": 1}), path=str(UNRESOLVED)),
+        lambda: tellegen.study_create(str(study), {"id": "s1", "request": "r"}, input_path=str(UNRESOLVED)),
+    ):
+        with pytest.raises(ValueError, match="fails validation"):
+            asyncio.run(call())
+    assert fake_binary() == []
+    assert not study.exists()
+
+
+def test_a_marked_balanced_module_is_refused_like_every_other_adapter(fake_binary, monkeypatch):
+    """The severity gate is the one `resolve_solver_case` applies, on the same wording."""
+    network = powerio.parse(CASE9).value
+
+    class Diagnostic:
+        code = "TEST.REFUSED"
+        severity = "error"
+        message = "the input states an unresolved identity"
+        target = None
+
+    class Marked:
+        diagnostics = (Diagnostic(),)
+        value = network
+
+    monkeypatch.setattr(powerio, "parse", lambda *args, **kwargs: Marked())
+    with pytest.raises(ValueError, match="fails validation: TEST.REFUSED"):
+        asyncio.run(tellegen.solve(path=str(CASE9)))
+    assert fake_binary() == []
 
 
 def test_solve_passes_edits_sensitivities_and_bounds_arrays(fake_binary):
@@ -274,5 +326,7 @@ def test_real_binary_solves_case9(monkeypatch):
     assert "objective" in result["response"]
     solution = asyncio.run(tellegen.solve_module(path=str(CASE9)))
     assert solution["value_type"] == "powerio.DcOpfSolution"
+    with pytest.raises(ValueError, match="balanced network or a calculation instance"):
+        asyncio.run(tellegen.solve(path=str(DIST)))
     contract = asyncio.run(tellegen.contract())
     assert contract["contract"] == "tellegen.cli/1"

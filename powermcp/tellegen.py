@@ -162,12 +162,16 @@ def _module_ir(
     """Serialized generation-2 IR for one declared value, and the selection that reached it.
 
     PowerIO parses a grid exchange ``path`` and serializes the module; an IR
-    document is deserialized so its identity is checked. A collection entry is
-    selected with ``time_index`` or ``scenario_id`` and serialized on its own;
-    an operating point entry travels as the network it states.
+    document is deserialized so its identity is checked. A module PowerIO marks
+    with an error is refused here, before and after selection, exactly as the
+    balanced solver adapters refuse it. A collection entry is selected with
+    ``time_index`` or ``scenario_id`` and serialized on its own; an operating
+    point entry travels as the network it states. Tellegen accepts a balanced
+    network or a calculation instance and lowers nothing, so any other value is
+    named here rather than after a round trip through the native process.
     """
     import powerio
-    from powermcp.solver_case import _select, _operating_point_module
+    from powermcp.solver_case import _check_diagnostics, _operating_point_module, _select
 
     if bool(powerio_ir) == (path is not None):
         raise ValueError("provide exactly one of powerio_ir or path")
@@ -178,9 +182,23 @@ def _module_ir(
         module = powerio.parse(path, format=source_format)
     else:
         module = powerio.deserialize(io.StringIO(powerio_ir))
-    module, selection = _select(module, time_index, scenario_id)
+    _check_diagnostics(module.diagnostics)
+    selected, selection = _select(module, time_index, scenario_id)
+    _check_diagnostics(selected.diagnostics)
+    module = selected
     if isinstance(module.value, powerio.OperatingPoint):
         module = _operating_point_module(module, [])
+    value = module.value
+    value_type = getattr(getattr(module, "_inner", None), "_type_name", None) or f"powerio.{type(value).__name__}"
+    # The values the native CLI consumes: a balanced network becomes the default
+    # DC OPF instance, and every other kind is refused by name.
+    native = (powerio.BalancedNetwork, powerio.DcOpfInstance, powerio.AcPfInstance, powerio.AcOpfInstance)
+    if not isinstance(value, native):
+        raise ValueError(
+            "Tellegen tools take a balanced network or a calculation instance; lower a "
+            "multiconductor network with a powerio adapter's `to_balanced` first. "
+            f"This module states {value_type}."
+        )
     text = powerio.serialize(module).text
     if text is None:
         raise RuntimeError("PowerIO serialization returned no text")
