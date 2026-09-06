@@ -1,8 +1,17 @@
-"""Native Tellegen Study operations over the versioned CLI contract."""
+"""Native Tellegen operations over the versioned CLI contract.
+
+Tellegen consumes and produces PowerIO IR generation 2. PowerMCP hands the
+CLI a serialized module and returns what the CLI states: a solve response, a
+stored solution module, a capacity proposal, or a Study summary. A grid
+exchange file given by ``path`` is parsed by PowerIO in this process and
+serialized to IR before it reaches Tellegen; PowerMCP never re-implements
+either side. Applying a Study proposal is a human action and is not a tool.
+"""
 from __future__ import annotations
 
 import asyncio
 import hashlib
+import io
 import json
 import math
 import os
@@ -11,15 +20,17 @@ import signal
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from mcp.server.mcpserver import MCPServer
 from powermcp.config import get, get_path
-from powermcp.sandbox import checked_path
+from powermcp.sandbox import checked_path, checked_read_tree, staged_file_write
 
-mcp = MCPServer("Tellegen Studies")
+mcp = MCPServer("Tellegen")
 MAX_BUNDLE_BYTES = 512 * 1024 * 1024
 OPERATIONS = frozenset({"inspect", "branch", "revise_goal", "compare", "propose", "record_evidence", "edit_demand", "restore_base"})
+FORMULATIONS = ("dcpf", "dcopf", "acpf", "socwr")
+DEFAULT_MAX_ELEMENTS = 2000
 
 
 def _binary() -> str:
@@ -28,7 +39,10 @@ def _binary() -> str:
     executable = shutil.which("tellegen")
     if executable:
         return executable
-    raise RuntimeError("Install the native Tellegen CLI with Study support or set POWERMCP_TELLEGEN_BINARY")
+    raise RuntimeError(
+        "Install the native Tellegen CLI (cargo build -p tellegen-cli --features conic) and set "
+        "POWERMCP_TELLEGEN_BINARY or `powermcp config set tellegen.binary <path>`"
+    )
 
 
 def _seconds(key: str, default: float) -> float:
@@ -42,8 +56,27 @@ def _seconds(key: str, default: float) -> float:
     return seconds
 
 
-async def _call(arguments: list[str], request: Any = None) -> Any:
-    data = b"" if request is None else json.dumps(request, allow_nan=False).encode()
+def _command(arguments: list[str]) -> list[str]:
+    binary = _binary()
+    # A Python script stands in for the compiled CLI in tests and on hosts
+    # without a Rust toolchain; the contract on stdin and stdout is the same.
+    if binary.endswith(".py"):
+        return [sys.executable, binary, *arguments]
+    return [binary, *arguments]
+
+
+async def _call(arguments: list[str], request: Any = None, *, raw_stdin: Optional[str] = None) -> Any:
+    """Run one CLI command and decode its JSON result.
+
+    ``request`` is JSON encoded onto stdin; ``raw_stdin`` passes text as is (a
+    serialized module). Progress events the CLI prints on stderr, one JSON
+    object per line, are returned under ``progress`` when the result is an
+    object.
+    """
+    if raw_stdin is not None:
+        data = raw_stdin.encode()
+    else:
+        data = b"" if request is None else json.dumps(request, allow_nan=False).encode()
     if len(data) > MAX_BUNDLE_BYTES:
         raise ValueError("Tellegen input exceeds the 512 MiB Study limit")
     timeout = _seconds("timeout_seconds", 1800)
@@ -51,7 +84,7 @@ async def _call(arguments: list[str], request: Any = None) -> Any:
     windows = sys.platform == "win32"
     options = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if windows else {}
     process = await asyncio.create_subprocess_exec(
-        _binary(), *arguments, stdin=asyncio.subprocess.PIPE,
+        *_command(arguments), stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, **options,
     )
     communication = asyncio.create_task(process.communicate(data))
@@ -82,11 +115,23 @@ async def _call(arguments: list[str], request: Any = None) -> Any:
         raise RuntimeError(f"Tellegen execution timed out. Cancellation allows the current trial to finish and saves completed planning evidence. Inspect the saved Study revision before retrying; a forced stop after {grace:g} seconds may leave the previous revision. A remaining .lock requires checking that its writer exited.") from None
     if process.returncode:
         raise RuntimeError(stderr.decode(errors="replace")[:2048] or "Tellegen failed without a diagnostic")
-    return json.loads(stdout)
+    result = json.loads(stdout)
+    progress = []
+    for line in stderr.decode(errors="replace").splitlines():
+        line = line.strip()
+        if line.startswith("{"):
+            try:
+                progress.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    if progress and isinstance(result, dict):
+        result = {**result, "progress": progress}
+    return result
 
 
 def _path(path: str, *, write: bool = False) -> str:
-    return str(checked_path(path, purpose="Study bundle", for_write=write))
+    path = checked_path(path, purpose="Study bundle", for_write=write)
+    return str(path)
 
 
 def _summary(value: dict[str, Any]) -> dict[str, Any]:
@@ -100,7 +145,212 @@ def _summary(value: dict[str, Any]) -> dict[str, Any]:
     comparison = value.get("comparison")
     if comparison:
         summary["comparison"] = {key: comparison[key] for key in ("goal", "left", "right", "left_value", "right_value", "improvement")}
+    if "progress" in value:
+        summary["progress"] = value["progress"]
     return summary
+
+
+# ---- PowerIO IR hand-off -------------------------------------------------------
+
+def _module_ir(
+    powerio_ir: str,
+    path: Optional[str],
+    source_format: Optional[str],
+    time_index: Optional[int],
+    scenario_id: Optional[str],
+) -> tuple[str, dict[str, Any]]:
+    """Serialized generation-2 IR for one declared value, and the selection that reached it.
+
+    PowerIO parses a grid exchange ``path`` and serializes the module; an IR
+    document is deserialized so its identity is checked. A collection entry is
+    selected with ``time_index`` or ``scenario_id`` and serialized on its own;
+    an operating point entry travels as the network it states.
+    """
+    import powerio
+    from powermcp.solver_case import _select, _operating_point_module
+
+    if bool(powerio_ir) == (path is not None):
+        raise ValueError("provide exactly one of powerio_ir or path")
+    if path is not None:
+        path = checked_path(path, purpose="path")
+        if Path(path).is_dir():
+            path = checked_read_tree(path, purpose="path")
+        module = powerio.parse(path, format=source_format)
+    else:
+        module = powerio.deserialize(io.StringIO(powerio_ir))
+    module, selection = _select(module, time_index, scenario_id)
+    if isinstance(module.value, powerio.OperatingPoint):
+        module = _operating_point_module(module, [])
+    text = powerio.serialize(module).text
+    if text is None:
+        raise RuntimeError("PowerIO serialization returned no text")
+    return text, selection
+
+
+def _module_summary(ir_text: str) -> dict[str, Any]:
+    """Value type and diagnostics summary of a serialized module Tellegen returned."""
+    import powerio
+    from powermcp.solver_case import diagnostic_records
+
+    module = powerio.deserialize(io.StringIO(ir_text))
+    records = diagnostic_records(module.diagnostics)
+    counts: dict[str, int] = {}
+    for record in records:
+        counts[record["severity"]] = counts.get(record["severity"], 0) + 1
+    value_type = getattr(getattr(module, "_inner", None), "_type_name", None) or f"powerio.{type(module.value).__name__}"
+    summary: dict[str, Any] = {"value_type": str(value_type), "diagnostics": records, "diagnostics_counts": counts}
+    value = module.value
+    for name in ("termination", "objective"):
+        if hasattr(value, name):
+            try:
+                summary[name] = getattr(value, name)
+            except Exception:  # a solution field the binding does not expose
+                continue
+    return summary
+
+
+def _bounded(payload: Any, max_elements: int) -> Any:
+    """Truncate every array longer than ``max_elements`` to a counted head."""
+    if isinstance(payload, list):
+        if len(payload) > max_elements:
+            return {"truncated": True, "count": len(payload), "head": [_bounded(item, max_elements) for item in payload[:max_elements]]}
+        return [_bounded(item, max_elements) for item in payload]
+    if isinstance(payload, dict):
+        return {key: _bounded(value, max_elements) for key, value in payload.items()}
+    return payload
+
+
+def _json_argument(text: str, name: str, expected: type) -> Any:
+    if not text:
+        return expected()
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{name} must be JSON: {exc}") from exc
+    if not isinstance(value, expected):
+        raise ValueError(f"{name} must be a JSON {expected.__name__}")
+    return value
+
+
+def _out_path(out_path: Optional[str], overwrite: bool) -> Optional[str]:
+    """Check a destination before any native process runs."""
+    if out_path is None:
+        return None
+    out_path = checked_path(out_path, purpose="out_path", for_write=True)
+    if not overwrite and Path(out_path).exists():
+        raise ValueError(f"{out_path} exists; pass overwrite=True to replace it")
+    return str(out_path)
+
+
+def _deliver(ir_text: str, checked_out_path: Optional[str], overwrite: bool) -> dict[str, Any]:
+    """Write a module to an already checked path through staging, or return it inline."""
+    if checked_out_path is None:
+        return {"powerio_ir": ir_text}
+
+    def write(staging: str) -> dict[str, Any]:
+        Path(staging).write_text(ir_text, encoding="utf-8")
+        return {"path": staging}
+
+    return staged_file_write(checked_out_path, overwrite, write)
+
+
+# ---- tools --------------------------------------------------------------------
+
+@mcp.tool()
+async def capabilities() -> dict[str, Any]:
+    """The installed Tellegen build's formulation and operand support matrix, and its CLI path."""
+    return {"binary": _binary(), "capabilities": await _call(["capabilities"])}
+
+
+@mcp.tool()
+async def solve(
+    powerio_ir: str = "",
+    path: Optional[str] = None,
+    source_format: Optional[str] = None,
+    time_index: Optional[int] = None,
+    scenario_id: Optional[str] = None,
+    formulation: str = "dcopf",
+    edits: str = "",
+    sensitivities: str = "",
+    max_elements: int = DEFAULT_MAX_ELEMENTS,
+) -> dict[str, Any]:
+    """Solve one PowerIO network with Tellegen: DC power flow, DC OPF (prices, dispatch, flows), AC power flow, or the SOCWR relaxation.
+
+    Provide serialized PowerIO IR or a grid exchange path (PowerIO parses it here).
+    Select a collection entry with time_index or scenario_id. `edits` is the
+    Tellegen request's `edits` object (`{"deltas": {...}, "rates": {...}}`) and
+    `sensitivities` its list; both are optional JSON. Arrays longer than
+    max_elements come back as `{"truncated": true, "count": n, "head": [...]}`.
+    """
+    if formulation not in FORMULATIONS:
+        raise ValueError(f"formulation must be one of {list(FORMULATIONS)}")
+    if max_elements < 1:
+        raise ValueError("max_elements must be positive")
+    ir_text, selection = _module_ir(powerio_ir, path, source_format, time_index, scenario_id)
+    request = {"formulation": formulation}
+    request_edits = _json_argument(edits, "edits", dict)
+    request_sens = _json_argument(sensitivities, "sensitivities", list)
+    if request_edits:
+        request["edits"] = request_edits
+    if request_sens:
+        request["sensitivities"] = request_sens
+    response = await _call([json.dumps(request)], raw_stdin=ir_text)
+    return {"formulation": formulation, "selection": selection, "response": _bounded(response, max_elements)}
+
+
+@mcp.tool()
+async def solve_module(
+    powerio_ir: str = "",
+    path: Optional[str] = None,
+    source_format: Optional[str] = None,
+    time_index: Optional[int] = None,
+    scenario_id: Optional[str] = None,
+    out_path: Optional[str] = None,
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    """Solve a stored module's DC OPF instance (a BalancedNetwork becomes the default instance) and return the powerio.DcOpfSolution module as PowerIO IR, written to out_path when given."""
+    destination = _out_path(out_path, overwrite)
+    ir_text, selection = _module_ir(powerio_ir, path, source_format, time_index, scenario_id)
+    solution = await _call(["solve-module"], raw_stdin=ir_text)
+    solution_text = json.dumps(solution)
+    return {"selection": selection, **_module_summary(solution_text), **_deliver(solution_text, destination, overwrite)}
+
+
+@mcp.tool()
+async def plan(
+    spec: str,
+    powerio_ir: str = "",
+    path: Optional[str] = None,
+    source_format: Optional[str] = None,
+    time_index: Optional[int] = None,
+    scenario_id: Optional[str] = None,
+    out_path: Optional[str] = None,
+    overwrite: bool = False,
+    max_elements: int = DEFAULT_MAX_ELEMENTS,
+) -> dict[str, Any]:
+    """Run Tellegen's bounded capacity planning search for a network and a CapacityPlanSpec (JSON; read `contract` for its schema). Returns the proposal and the exact proposed solution module."""
+    destination = _out_path(out_path, overwrite)
+    specification = _json_argument(spec, "spec", dict)
+    if not specification:
+        raise ValueError("spec must be a CapacityPlanSpec object")
+    ir_text, selection = _module_ir(powerio_ir, path, source_format, time_index, scenario_id)
+    response = await _call(["plan"], {"module": json.loads(ir_text), "spec": specification})
+    solution = response.get("solution_module")
+    result: dict[str, Any] = {"selection": selection, "plan": _bounded(response.get("plan"), max_elements)}
+    if solution is not None:
+        solution_text = json.dumps(solution)
+        result["solution"] = _module_summary(solution_text)
+        if destination is not None:
+            result.update(_deliver(solution_text, destination, overwrite))
+        else:
+            result["solution_powerio_ir"] = solution_text
+    return result
+
+
+@mcp.tool()
+async def contract() -> dict[str, Any]:
+    """The installed CLI's versioned contract: Tellegen and PowerIO versions and the generated JSON Schemas for Studies, planning, and the PowerIO IR module."""
+    return await _call(["contract"])
 
 
 @mcp.tool()
@@ -110,9 +360,22 @@ async def study_contract() -> dict[str, Any]:
 
 
 @mcp.tool()
-async def study_create(path: str, request: dict[str, Any]) -> dict[str, Any]:
-    """Create a durable Study from PowerIO IR and a declared goal using the native CreateStudy schema."""
-    return _summary(await _call(["study", "create", _path(path, write=True)], request))
+async def study_create(
+    path: str,
+    request: dict[str, Any],
+    input_path: Optional[str] = None,
+    input_format: Optional[str] = None,
+    time_index: Optional[int] = None,
+    scenario_id: Optional[str] = None,
+) -> dict[str, Any]:
+    """Create a durable Study from PowerIO IR and a declared goal using the native CreateStudy schema. `input_path` names a grid exchange file PowerIO parses into the request's `input` (and `base_input` when absent)."""
+    request = dict(request)
+    if input_path is not None:
+        ir_text, _ = _module_ir("", input_path, input_format, time_index, scenario_id)
+        request["input"] = ir_text
+        request.setdefault("base_input", ir_text)
+    checked = _path(path, write=True)
+    return _summary(await _call(["study", "create", checked], request))
 
 
 @mcp.tool()
@@ -156,7 +419,8 @@ async def study_run(path: str, expected_revision: int, operation: dict[str, Any]
     """Inspect, branch, revise a goal, compare, adjust demand, restore the base case, propose interventions or attach evidence using the native StudyOperation schema. Proposals stay unapplied; application requires an explicit native CLI user action."""
     if operation.get("kind") not in OPERATIONS:
         raise ValueError("Unsupported agent operation. Apply the reviewed proposal through an explicit native CLI user action.")
-    return _summary(await _call(["study", "run", _path(path, write=True)],
+    checked = _path(path, write=True)
+    return _summary(await _call(["study", "run", checked, "--progress"],
                                {"expected_revision": expected_revision, "operation": operation}))
 
 
@@ -168,7 +432,8 @@ async def study_import(source_path: str, path: str) -> dict[str, Any]:
         data = stream.read(MAX_BUNDLE_BYTES + 1)
     if len(data) > MAX_BUNDLE_BYTES:
         raise ValueError("Study bundle exceeds 512 MiB")
-    return _summary(await _call(["study", "import", _path(path, write=True)], json.loads(data)))
+    checked = _path(path, write=True)
+    return _summary(await _call(["study", "import", checked], json.loads(data)))
 
 
 @mcp.tool()

@@ -11,7 +11,7 @@ PLEXOSDB/README.md for the (currently git-only) install step.
 
 This module keeps no copy of plexosdb-mcp's tool implementations -- it builds the
 upstream FastMCP server object as-is (``build_mcp_server``) and re-exports it, the
-same shape as ``powerio/powerio_mcp.py``'s ``mcp = _server.mcp``. plexosdb-mcp builds
+same shape the retired ``powerio/powerio_mcp.py`` shim used (``mcp = _server.mcp``). plexosdb-mcp builds
 its server via a factory rather than a module-level singleton, so calling that
 factory once at import time is the direct analogue here.
 

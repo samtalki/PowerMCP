@@ -493,12 +493,16 @@ def get_system_info() -> Dict[str, Any]:
 
 @mcp.tool()
 def load_network_from_json(
-    network_json: str,
-    out_path: str,
+    network_json: str = "",
+    out_path: str = "",
     operating_point: Optional[int] = None,
     study_commit: Optional[int] = None,
     time_index: Optional[int] = None,
     scenario_id: Optional[str] = None,
+    powerio_ir: str = "",
+    edits: str = "",
+    to_balanced: bool = False,
+    base_mva: float = 100.0,
 ) -> Dict[str, Any]:
     """Stage a selected PowerIO IR module as MATPOWER for ANDES.
 
@@ -515,10 +519,20 @@ def load_network_from_json(
         study_commit: Retired package selector; export a Tellegen Study state as IR
         time_index: Explicit TimeSeries index
         scenario_id: Explicit ScenarioSet identifier
+        powerio_ir: Serialized PowerIO IR from the powerio server (the
+            preferred spelling; network_json is its alias)
+        edits: JSON list of typed what-if edits PowerIO applies before the
+            conversion, for example
+            [{"op": "set_load_active_power", "load": "loads:0", "mw": 91.5}]
+        to_balanced: Authorize the multiconductor to balanced transformation;
+            the response carries its readiness report as `lowering`
+        base_mva: System base for that transformation
 
     Returns:
         Dict with status, case_file path, component counts, and fidelity warnings
     """
+    if not out_path:
+        return {"status": "error", "message": "out_path is required"}
     try:
         out_path = checked_path(out_path, purpose="out_path", for_write=True)
     except PathNotAllowed as exc:
@@ -530,6 +544,10 @@ def load_network_from_json(
             study_commit=study_commit,
             time_index=time_index,
             scenario_id=scenario_id,
+            powerio_ir=powerio_ir,
+            edits=edits,
+            to_balanced=to_balanced,
+            base_mva=base_mva,
         )
         case = prepared.network
         conv = prepared.emit("matpower")
@@ -545,10 +563,9 @@ def load_network_from_json(
         "info": {
             "buses": case.n_buses,
             "branches": case.n_branches,
-            "generators": case.n_gens,
+            "generators": case.n_generators,
         },
-        "warnings": list(prepared.warnings) + list(diagnostic_messages(conv.diagnostics)),
-        **({"package": prepared.package} if prepared.package is not None else {}),
+        **prepared.response_fields(conv),
     }
 
 
@@ -561,6 +578,9 @@ def load_network_from_any(
     study_commit: Optional[int] = None,
     time_index: Optional[int] = None,
     scenario_id: Optional[str] = None,
+    edits: str = "",
+    to_balanced: bool = False,
+    base_mva: float = 100.0,
 ) -> Dict[str, Any]:
     """Stage any powerio readable case as a MATPOWER file for ANDES.
 
@@ -578,6 +598,12 @@ def load_network_from_any(
         study_commit: Retired package selector; export a Tellegen Study state as IR
         time_index: Explicit TimeSeries index
         scenario_id: Explicit ScenarioSet identifier
+        edits: JSON list of typed what-if edits PowerIO applies before the
+            conversion, for example
+            [{"op": "set_load_active_power", "load": "loads:0", "mw": 91.5}]
+        to_balanced: Authorize the multiconductor to balanced transformation;
+            the response carries its readiness report as `lowering`
+        base_mva: System base for that transformation
 
     Returns:
         Dict with status, case_file path, component counts, and fidelity warnings
@@ -598,6 +624,9 @@ def load_network_from_any(
             study_commit=study_commit,
             time_index=time_index,
             scenario_id=scenario_id,
+            edits=edits,
+            to_balanced=to_balanced,
+            base_mva=base_mva,
         )
         case = prepared.network
         conv = prepared.emit("matpower")
@@ -615,10 +644,9 @@ def load_network_from_any(
         "info": {
             "buses": case.n_buses,
             "branches": case.n_branches,
-            "generators": case.n_gens,
+            "generators": case.n_generators,
         },
-        "warnings": list(prepared.warnings) + list(diagnostic_messages(conv.diagnostics)),
-        **({"package": prepared.package} if prepared.package is not None else {}),
+        **prepared.response_fields(conv),
     }
 
 

@@ -34,6 +34,7 @@ from powerio.mcp.sandbox import (
     checked_read_tree,
     decode_local_path,
     staged_directory_write,
+    staged_file_write,
 )
 
 

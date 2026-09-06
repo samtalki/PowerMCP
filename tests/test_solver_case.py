@@ -105,3 +105,105 @@ def test_exactly_one_input_and_matching_selectors_are_required():
         resolve_solver_case(file_path="case.m", network_json="{}")
     with pytest.raises(ValueError, match="does not match"):
         resolve_solver_case(file_path=str(CASE9), time_index=0)
+
+
+DIST = Path(__file__).parent / "data" / "opendss" / "fourwire_linecode.dss"
+
+
+def test_powerio_ir_is_the_primary_argument_and_network_json_its_alias():
+    payload = ir(powerio.parse(CASE9))
+    primary = resolve_solver_case(powerio_ir=payload)
+    alias = resolve_solver_case(network_json=payload)
+    assert primary.network.n_buses == alias.network.n_buses == 9
+    assert primary.value_type == "powerio.BalancedNetwork"
+    assert primary.selection == {}
+    assert isinstance(primary.diagnostics, tuple)
+    with pytest.raises(ValueError, match="not both"):
+        resolve_solver_case(powerio_ir=payload, network_json=payload)
+    with pytest.raises(ValueError, match="migration"):
+        resolve_solver_case(powerio_ir='{"model_kind":"balanced","model":{}}')
+
+
+def test_response_fields_carry_the_shared_tail():
+    resolved = resolve_solver_case(file_path=str(CASE9))
+    conversion = resolved.emit("matpower")
+    fields = resolved.response_fields(conversion)
+    assert fields["value_type"] == "powerio.BalancedNetwork"
+    assert fields["selection"] == {}
+    assert fields["fidelity"] in {"exact_same_format", "canonical"}
+    assert isinstance(fields["diagnostics"], list) and isinstance(fields["warnings"], list)
+    assert "edits" not in fields and "lowering" not in fields and "package" not in fields
+
+
+def test_typed_edits_apply_before_the_solver_sees_the_network():
+    base = powerio.parse(CASE9).value
+    load = base.loads[0]
+    load_id = load.get("uid") or "loads:0"
+    branch_id = base.branches[0].get("uid") or "branches:0"
+    edits = json.dumps([
+        {"op": "set_load_active_power", "load": load_id, "mw": 91.5},
+        {"op": "set_branch_thermal_rating", "branch": branch_id, "mva": 123.0},
+        {"op": "set_bus_load_active_power", "bus": base.loads[1]["bus"], "mw": 77.0, "allocation": "equal"},
+    ])
+    resolved = resolve_solver_case(file_path=str(CASE9), edits=edits)
+    network = resolved.network
+    assert network.loads[0]["p"] == pytest.approx(91.5)
+    assert network.branches[0]["rate_a"] == pytest.approx(123.0)
+    assert network.loads[1]["p"] == pytest.approx(77.0)
+    assert resolved.edits["connectivity_changed"] is False
+    fields = {(change["component_type"], change["field"]) for change in resolved.edits["changes"]}
+    assert ("load", "active_power") in fields or any(c["component_type"] == "load" for c in resolved.edits["changes"])
+    assert any(change["component_type"] == "branch" for change in resolved.edits["changes"])
+    # The emitted case carries the edit, so every solver adapter sees it.
+    assert "91.5" in resolved.emit("matpower").text
+    # The source module is untouched: a fresh resolution states the original demand.
+    assert resolve_solver_case(file_path=str(CASE9)).network.loads[0]["p"] == pytest.approx(base.loads[0]["p"])
+
+
+def test_edits_are_validated_as_a_whole_before_anything_applies():
+    base = powerio.parse(CASE9).value
+    load_id = base.loads[0].get("uid") or "loads:0"
+    for bad, message in (
+        ('[{"op": "set_load_active_power", "load": "%s", "mw": 91.5}, {"op": "teleport"}]' % load_id, "unknown op"),
+        ('[{"op": "set_load_active_power", "load": "%s", "mw": "big"}]' % load_id, "finite number"),
+        ('[{"op": "set_branch_in_service", "branch": "branches:0", "in_service": "no"}]', "true or false"),
+        ('[{"op": "set_bus_load_active_power", "bus": 5, "mw": 1.0, "allocation": "random"}]', "allocation"),
+        ('{"op": "set_load_active_power"}', "JSON list"),
+    ):
+        with pytest.raises(ValueError, match=message):
+            resolve_solver_case(file_path=str(CASE9), edits=bad)
+    with pytest.raises(ValueError, match="edit rejected"):
+        resolve_solver_case(file_path=str(CASE9), edits='[{"op": "set_load_active_power", "load": "loads:999", "mw": 1.0}]')
+
+
+def test_multiconductor_lowering_is_an_explicit_choice_with_a_report():
+    with pytest.raises(ValueError, match="to_balanced"):
+        resolve_solver_case(file_path=str(DIST))
+    resolved = resolve_solver_case(file_path=str(DIST), to_balanced=True, base_mva=1.0)
+    assert isinstance(resolved.network, powerio.BalancedNetwork)
+    assert resolved.network.n_buses >= 2
+    assert resolved.lowering is not None
+    assert "ready" in resolved.lowering
+    fields = resolved.response_fields()
+    assert fields["lowering"] == resolved.lowering
+    assert fields["value_type"] == "powerio.MulticonductorNetwork"
+
+
+def test_operating_point_entries_reach_the_solver_as_their_network():
+    network = powerio.parse(CASE9).value
+    document = json.loads(ir(powerio.PioModule.from_value(network)))
+    series = {
+        "schema": document["schema"], "version": document["version"], "producer": document["producer"],
+        "value": {
+            "type": "powerio.TimeSeries<powerio.OperatingPoint<powerio.BalancedNetwork>>",
+            "data": {
+                "network": document["value"]["data"],
+                "time_points": [{"label": "h0"}, {"label": "h1"}],
+                "values": [{"quantities": {}}, {"quantities": {}}],
+            },
+        },
+    }
+    resolved = resolve_solver_case(powerio_ir=json.dumps(series), time_index=1)
+    assert resolved.network.n_buses == 9
+    assert resolved.selection == {"time_index": 1}
+    assert "mpc.bus" in resolved.emit("matpower").text

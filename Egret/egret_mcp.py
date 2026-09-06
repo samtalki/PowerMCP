@@ -252,6 +252,9 @@ def load_model_from_any(
     study_commit: Optional[int] = None,
     time_index: Optional[int] = None,
     scenario_id: Optional[str] = None,
+    edits: str = "",
+    to_balanced: bool = False,
+    base_mva: float = 100.0,
 ) -> Dict[str, Any]:
     """Convert any powerio readable case file into an egret model.
 
@@ -270,6 +273,12 @@ def load_model_from_any(
         study_commit: Retired package selector; export a Tellegen Study state as IR
         time_index: Explicit TimeSeries index
         scenario_id: Explicit ScenarioSet identifier
+        edits: JSON list of typed what-if edits PowerIO applies before the
+            conversion, for example
+            [{"op": "set_load_active_power", "load": "loads:0", "mw": 91.5}]
+        to_balanced: Authorize the multiconductor to balanced transformation;
+            the response carries its readiness report as `lowering`
+        base_mva: System base for that transformation
 
     Returns:
         Dict with status, the staged `case_file` path, model element counts,
@@ -287,6 +296,9 @@ def load_model_from_any(
             study_commit=study_commit,
             time_index=time_index,
             scenario_id=scenario_id,
+            edits=edits,
+            to_balanced=to_balanced,
+            base_mva=base_mva,
         )
         conv = prepared.emit("egret-json")
         path, info = _stage_egret_model(conv.text)
@@ -298,18 +310,21 @@ def load_model_from_any(
         "status": "success",
         "case_file": path,
         "model_info": info,
-        "warnings": list(prepared.warnings) + list(diagnostic_messages(conv.diagnostics)),
-        **({"package": prepared.package} if prepared.package is not None else {}),
+        **prepared.response_fields(conv),
     }
 
 
 @mcp.tool()
 def load_model_from_json(
-    network_json: str,
+    network_json: str = "",
     operating_point: Optional[int] = None,
     study_commit: Optional[int] = None,
     time_index: Optional[int] = None,
     scenario_id: Optional[str] = None,
+    powerio_ir: str = "",
+    edits: str = "",
+    to_balanced: bool = False,
+    base_mva: float = 100.0,
 ) -> Dict[str, Any]:
     """Convert a selected PowerIO IR module into an Egret model.
 
@@ -326,6 +341,14 @@ def load_model_from_json(
         study_commit: Retired package selector; export a Tellegen Study state as IR
         time_index: Explicit TimeSeries index
         scenario_id: Explicit ScenarioSet identifier
+        powerio_ir: Serialized PowerIO IR from the powerio server (the
+            preferred spelling; network_json is its alias)
+        edits: JSON list of typed what-if edits PowerIO applies before the
+            conversion, for example
+            [{"op": "set_load_active_power", "load": "loads:0", "mw": 91.5}]
+        to_balanced: Authorize the multiconductor to balanced transformation;
+            the response carries its readiness report as `lowering`
+        base_mva: System base for that transformation
 
     Returns:
         Dict with status, the staged `case_file` path, model element counts,
@@ -338,6 +361,10 @@ def load_model_from_json(
             study_commit=study_commit,
             time_index=time_index,
             scenario_id=scenario_id,
+            powerio_ir=powerio_ir,
+            edits=edits,
+            to_balanced=to_balanced,
+            base_mva=base_mva,
         )
         conv = prepared.emit("egret-json")
         path, info = _stage_egret_model(conv.text)
@@ -347,8 +374,7 @@ def load_model_from_json(
         "status": "success",
         "case_file": path,
         "model_info": info,
-        "warnings": list(prepared.warnings) + list(diagnostic_messages(conv.diagnostics)),
-        **({"package": prepared.package} if prepared.package is not None else {}),
+        **prepared.response_fields(conv),
     }
 
 
