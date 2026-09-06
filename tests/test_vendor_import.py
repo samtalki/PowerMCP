@@ -46,7 +46,7 @@ def test_psse_import_side_effect_free_then_inits_once(monkeypatch):
 
 
 def test_plexosdb_import_side_effect_free(monkeypatch):
-    """plexosdb_mcp.main is an always-imports thin re-export (like powerio_mcp.py),
+    """plexosdb_mcp.main is an always-imports thin re-export (like the retired powerio_mcp.py),
     not a lazy _ensure_*() style module -- so "side-effect-free" here means the
     module builds its FastMCP server using only the (mocked) upstream
     plexosdb_mcp.server factory, with no real plexosdb database opened, no

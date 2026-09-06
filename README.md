@@ -127,50 +127,113 @@ These tools wrap commercial or locally-installed software, so PowerMCP stores th
 
 ### Case compilation between servers (PowerIO)
 
-PowerMCP runs the server shipped in PowerIO 0.11: `powermcp run powerio`.
-PowerIO modules carry typed electrical values, provenance and diagnostics.
-Their portable representation is PowerIO IR generation 2. A solver adapter
-checks the selected value before constructing its model.
+PowerIO IR is the exchange contract of this repository. PowerMCP runs the
+server shipped in PowerIO 0.11 (`powermcp run powerio` is `python -m
+powerio.mcp`); that server parses every grid exchange format, emits every
+target, summarizes, diagnoses, normalizes, lowers multiconductor networks, and
+calculates matrices. Its `parse` tool returns serialized **PowerIO IR
+generation 2** (`"schema": "pio-ir"`, `"version": 2`), a typed module carrying
+the electrical value, its provenance and its diagnostics. Every other server
+here consumes that document: the pandapower, PyPSA, ANDES and Egret adapters
+turn it into their own model with PowerIO's writers, and the Tellegen server
+hands it to the native solver. PowerMCP itself never re-parses, re-validates,
+or recomputes what PowerIO states; it routes a declared value to a consumer
+that accepts it and owns only the final step into one simulator.
 
 ```python
-parsed = parse(path="case9.raw")
+parsed = parse(path="case9.raw")                     # powerio server
 ir = parsed["powerio_ir"]
 summarize(powerio_ir=ir)
-calc_matrix(matrix="ptdf", powerio_ir=ir)
+calc_matrix(matrix="ptdf", powerio_ir=ir)            # rows and columns carry bus ids and branch identities
 diagnostics(powerio_ir=ir)
-import_case_from_json(network_json=ir, output_path="case9.nc")  # PyPSA
-load_network_from_json(network_json=ir)                       # pandapower
+import_case_from_json(powerio_ir=ir, output_path="case9.nc")  # PyPSA
+load_network_from_json(powerio_ir=ir)                         # pandapower
+load_model_from_json(powerio_ir=ir)                           # Egret
+load_network_from_json(powerio_ir=ir, out_path="case9.m")     # ANDES
+solve(powerio_ir=ir, formulation="dcopf")                     # tellegen
 emit(format="psse", destination="case9.raw", powerio_ir=ir)
 ```
 
-A `ScenarioSet` requires `scenario_id`; a `TimeSeries` requires `time_index`.
-Nested collections require both selectors. The same selection arguments are
-available on the pandapower, PyPSA, ANDES and Egret imports. The
+`powerio_ir` is the argument every adapter takes; `network_json` remains an
+alias for the same document. A `ScenarioSet` requires `scenario_id`; a
+`TimeSeries` requires `time_index`; nested collections require both. An
+operating point entry reaches the solver as the network it states. The
 `operating_point` argument remains an alias for `time_index`.
 
 ```python
 import_case_from_json(
-    network_json=ir, output_path="dispatch.nc",
+    powerio_ir=ir, output_path="dispatch.nc",
     scenario_id="high-demand", time_index=3,
 )
 ```
 
-Multiconductor inputs require explicit PowerIO lowering before a balanced
-solver can run. Retaining a component does not establish that the selected
-solver models it. PyPSA and pandapower use PowerIO's writers for supported
-costs, voltage targets and element status.
+Every adapter response carries the same tail: `value_type` (the PowerIO
+structural type that was selected), `selection`, `diagnostics` (full PowerIO
+records with code, severity, target, spans and suggested action) and
+`warnings`. The powerio adapters add the emission `fidelity`
+(`exact_same_format` when PowerIO echoed retained source bytes, `canonical` for
+fresh output) and the typed `edits` report described below, because they own
+the conversion into their own model. The `package` key keeps the IR context
+earlier clients read.
+
+The Tellegen tools carry the same four keys for the module they hand to the
+native solver, and `solve_module` and `plan` add what the returned module
+states. They take no typed `edits` list: Tellegen's own `edits` argument is the
+native request object (`{"deltas": ..., "rates": ...}`) the CLI applies inside
+the solve.
+
+#### Typed edits before a solver import
+
+The powerio adapters accept `edits`, a JSON list of what-if changes PowerIO
+applies as typed updates before the conversion. The whole list is validated
+first, then applied in list order; consecutive updates of one class apply as
+one atomic batch, and a bus load reallocation sees the values produced by the
+edits before it. The response reports the changed components, in application
+order, under `edits`.
+
+| op | keys |
+|---|---|
+| `set_load_active_power` | `load`, `mw`, `terminal?` |
+| `set_load_reactive_power` | `load`, `mvar`, `terminal?` |
+| `set_generator_active_power` | `generator`, `mw`, `terminal?` |
+| `set_generator_reactive_power` | `generator`, `mvar`, `terminal?` |
+| `set_generator_voltage_magnitude` | `generator`, `vm_pu` |
+| `set_generator_in_service` | `generator`, `in_service` |
+| `set_branch_in_service` | `branch`, `in_service` |
+| `set_transformer_tap_ratio` | `transformer`, `tap_ratio` |
+| `set_transformer_phase_shift` | `transformer`, `shift_degrees` |
+| `set_switch_closed` | `switch`, `closed` |
+| `set_branch_thermal_rating` | `branch`, `mva`, `terminal?` |
+| `set_bus_load_active_power` | `bus`, `mw`, `allocation` (`proportional_to_current_active_power` or `equal`) |
+
+Component ids are the stable identities PowerIO reports (`loads:0`,
+`branches:3`, or the source uid). A bus demand edit names an allocation rule
+because PowerIO never assigns aggregate demand to an arbitrary load.
+
+```python
+load_network_from_json(
+    powerio_ir=ir,
+    edits='[{"op": "set_load_active_power", "load": "loads:0", "mw": 91.5},'
+          ' {"op": "set_branch_in_service", "branch": "branches:3", "in_service": false}]',
+)
+```
+
+#### Distribution networks
+
+A multiconductor value is rejected by a balanced solver until the caller asks
+for the transformation: pass `to_balanced=True` (and `base_mva`) and the
+response carries PowerIO's readiness report under `lowering`, or call the
+powerio server's `to_balanced_report` and `to_balanced` tools first. Retaining
+a component does not establish that the selected solver models it. Use `emit`
+for a backend that needs files: OpenDSS output is a directory bundle whose
+master DSS artifact `compile_opendss_file` accepts; `bmopf-json@0.1.0` and
+`bmopf-json@0.2.0` select the BMOPF schema version (the latter writes draft
+BMOPF 0.2, subject to Task Force approval); `geo-json` writes a geographic
+layer.
 
 The retired `Package`, `model-json`, `package_json` and package `study_commit`
-contracts require migration. Export the electrical state of a Tellegen Study
-as generation-2 IR before using a solver adapter. Study goals, branching and
-decisions belong to Tellegen's Study document. Responses retain the `package`
-context key for adapter compatibility; its contents identify the IR generation,
-producer, value type and explicit selection.
-
-Use `emit` for a backend that needs files. OpenDSS output is a directory bundle;
-compile its returned master DSS artifact. Select BMOPF output versions with
-`bmopf-json@0.1.0` and `bmopf-json@0.2.0`. The latter writes draft BMOPF 0.2, subject to Task Force approval.
-
+contracts require migration: re-parse the original case and pass its
+`powerio_ir`. Study goals, branching and decisions belong to Tellegen.
 
 PowerIO MCP paths support local files and `file://` URIs. Set
 `POWERIO_MCP_ALLOWED_ROOTS` to an `os.pathsep` separated directory list to
@@ -179,6 +242,47 @@ supported. Directory inputs check every descendant, and generated directories
 install from private sibling staging paths. Place `POWERMCP_HOME` under an
 allowed root for solver run artifacts. These checks cannot prevent another
 process from replacing a path after validation.
+
+### Tellegen (native solver and Studies)
+
+[Tellegen](https://github.com/eigenergy/tellegen) solves DC power flow, DC OPF
+with prices and dispatch, AC power flow and the SOCWR relaxation, computes
+sensitivities, runs bounded capacity planning, and keeps durable Studies. It
+consumes and produces PowerIO IR, so `powermcp run tellegen` is the third leg of
+the same contract: the powerio server parses, Tellegen solves, and the solution
+comes back as a `powerio.DcOpfSolution` module every other tool can read.
+
+Build the CLI and point PowerMCP at it:
+
+```sh
+cargo build -p tellegen-cli --features conic     # in a tellegen checkout
+powermcp config set tellegen.binary /path/to/target/debug/tellegen
+# or: export POWERMCP_TELLEGEN_BINARY=/path/to/tellegen, or put tellegen on PATH
+powermcp doctor                                  # runs `tellegen capabilities`
+```
+
+Tools: `capabilities`, `contract`, `solve(powerio_ir | path, formulation,
+edits, sensitivities, max_elements)`, `solve_module(..., out_path)`,
+`plan(spec, ...)`, and the Study family `study_contract`, `study_create`
+(`input_path` lets PowerIO parse a grid exchange file into the Study input),
+`study_inspect`, `study_run`, `study_export`, `study_import`. A grid exchange
+`path` is parsed by PowerIO in the server process and serialized to IR before
+it reaches the binary; collection entries take `time_index` and `scenario_id`.
+Tellegen takes a balanced network or a calculation instance and lowers nothing:
+a multiconductor value is refused here, before the binary runs, so lower it
+with the powerio server's `to_balanced` first. A module PowerIO marks with an
+error is refused on the same terms as every other adapter refuses it.
+Applying a Study proposal binds a recommendation to the Study and is a human
+action: it is not a tool, and `study_run` refuses the `apply` operation.
+
+The adapter accepts `POWERMCP_TELLEGEN_TIMEOUT_SECONDS` (default 1800) and
+`POWERMCP_TELLEGEN_CANCEL_GRACE_SECONDS` (default 300). Equivalent keys live
+under `[tellegen]` in the configuration file. Cancellation requests SIGTERM on
+POSIX and CTRL_BREAK on a Windows process group, allowing the current exact
+trial to finish and completed evidence to be saved. After the grace period, or
+without a usable Windows console, a forced stop can retain only the previous
+saved revision. Inspect the Study before retrying. See
+[powermcp/TELLEGEN.md](powermcp/TELLEGEN.md).
 
 ### Running from a clone (without installing)
 
@@ -220,11 +324,3 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - All contributors who help make this project better
 - [The Power and AI Initiative (PAI) at Harvard SEAS](https://pai.seas.harvard.edu/)
 
-
-The native Tellegen Study adapter accepts `POWERMCP_TELLEGEN_TIMEOUT_SECONDS`
-(default 1800) and `POWERMCP_TELLEGEN_CANCEL_GRACE_SECONDS` (default 300).
-Equivalent keys live under `[tellegen]` in the configuration file. Cancellation
-requests SIGTERM on POSIX and CTRL_BREAK on a Windows process group, allowing the
-current exact trial to finish and completed evidence to be saved. After the grace
-period, or without a usable Windows console, a forced stop can retain only the
-previous saved revision. Inspect the Study before retrying.

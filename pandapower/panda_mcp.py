@@ -11,7 +11,7 @@ _repo_root_added = _repo_root not in sys.path
 if _repo_root_added:
     sys.path.insert(0, _repo_root)
 try:
-    from powermcp.solver_case import resolve_solver_case, diagnostic_messages
+    from powermcp.solver_case import resolve_solver_case, diagnostic_messages, diagnostic_records
     from powermcp.sandbox import PathNotAllowed, checked_path
 finally:
     if _repo_root_added:
@@ -281,31 +281,13 @@ def get_network_info() -> Dict[str, Any]:
 _POWERIO_HINT = "powerio not installed: pip install 'powerio[mcp,matrix]'"
 
 def _powerio_to_net(case):
-    """Use PowerIO's native writer to create the pandapower network."""
+    """Use PowerIO's native writer to create the pandapower network.
+
+    Returns the network and the shared response fields: value type, selection,
+    diagnostics, warnings, emission fidelity, edits, and lowering report.
+    """
     conversion = case.emit("pandapower-json")
-    return pp.from_json_string(conversion.text), list(diagnostic_messages(conversion.diagnostics))
-
-
-def _ppc_to_matpower_text(ppc) -> str:
-    """Serialize PYPOWER input tables as MATPOWER .m text for powerio to parse.
-    Columns beyond the MATPOWER input widths (result columns) are dropped."""
-    width = {"bus": 13, "gen": 21, "branch": 13}
-    out = [
-        "function mpc = ppc_export",
-        "mpc.version = '2';",
-        f"mpc.baseMVA = {float(ppc['baseMVA'])!r};",
-    ]
-    for name in ("bus", "gen", "branch", "gencost"):
-        table = ppc.get(name)
-        if table is None or len(table) == 0:
-            continue
-        w = width.get(name)
-        rows = "\n".join(
-            "\t" + "\t".join(repr(float(v)) for v in (row[:w] if w else row)) + ";"
-            for row in table
-        )
-        out.append(f"mpc.{name} = [\n{rows}\n];")
-    return "\n".join(out) + "\n"
+    return pp.from_json_string(conversion.text), case.response_fields(conversion)
 
 
 def _network_info_response(
@@ -313,6 +295,7 @@ def _network_info_response(
     *,
     warnings: Optional[List[str]] = None,
     package: Optional[Dict[str, Any]] = None,
+    **fields: Any,
 ) -> Dict[str, Any]:
     response = {
         "status": "success",
@@ -323,8 +306,9 @@ def _network_info_response(
             "trafos": len(_current_net.trafo),
         },
     }
+    response.update(fields)
     if warnings:
-        response["warnings"] = warnings
+        response["warnings"] = list(dict.fromkeys([*response.get("warnings", []), *warnings]))
     if package is not None:
         response["package"] = package
     return response
@@ -338,6 +322,9 @@ def load_network_from_any(
     study_commit: Optional[int] = None,
     time_index: Optional[int] = None,
     scenario_id: Optional[str] = None,
+    edits: str = "",
+    to_balanced: bool = False,
+    base_mva: float = 100.0,
 ) -> Dict[str, Any]:
     """Load a network from any powerio readable case file.
 
@@ -354,6 +341,14 @@ def load_network_from_any(
         study_commit: Retired package selector; export a Tellegen Study state as IR
         time_index: Explicit TimeSeries index
         scenario_id: Explicit ScenarioSet identifier
+        edits: JSON list of typed what-if edits PowerIO applies before the
+            conversion, in list order, for example
+            [{"op": "set_load_active_power", "load": "loads:0", "mw": 91.5}]
+            Consecutive updates of one class apply as one atomic batch, and a
+            bus load reallocation sees the values the edits before it produced.
+        to_balanced: Authorize the multiconductor to balanced transformation;
+            the response carries its readiness report as `lowering`
+        base_mva: System base for that transformation
 
     Returns:
         Dict containing status and network information
@@ -372,26 +367,32 @@ def load_network_from_any(
             study_commit=study_commit,
             time_index=time_index,
             scenario_id=scenario_id,
+            edits=edits,
+            to_balanced=to_balanced,
+            base_mva=base_mva,
         )
-        _current_net, conversion_warnings = _powerio_to_net(prepared)
+        _current_net, fields = _powerio_to_net(prepared)
     except FileNotFoundError:
         return {"status": "error", "message": f"File not found: {file_path}"}
     except Exception as e:
         return {"status": "error", "message": f"Failed to load network: {str(e)}"}
     return _network_info_response(
         f"Network loaded successfully from {file_path}",
-        warnings=list(prepared.warnings) + conversion_warnings,
-        package=prepared.package,
+        **fields,
     )
 
 
 @mcp.tool()
 def load_network_from_json(
-    network_json: str,
+    network_json: str = "",
     operating_point: Optional[int] = None,
     study_commit: Optional[int] = None,
     time_index: Optional[int] = None,
     scenario_id: Optional[str] = None,
+    powerio_ir: str = "",
+    edits: str = "",
+    to_balanced: bool = False,
+    base_mva: float = 100.0,
 ) -> Dict[str, Any]:
     """Load PowerIO model JSON or one selected ``.pio.json`` module state.
 
@@ -408,6 +409,16 @@ def load_network_from_json(
         study_commit: Retired package selector; export a Tellegen Study state as IR
         time_index: Explicit TimeSeries index
         scenario_id: Explicit ScenarioSet identifier
+        powerio_ir: Serialized PowerIO IR from the powerio server (the
+            preferred spelling; network_json is its alias)
+        edits: JSON list of typed what-if edits PowerIO applies before the
+            conversion, in list order, for example
+            [{"op": "set_load_active_power", "load": "loads:0", "mw": 91.5}]
+            Consecutive updates of one class apply as one atomic batch, and a
+            bus load reallocation sees the values the edits before it produced.
+        to_balanced: Authorize the multiconductor to balanced transformation;
+            the response carries its readiness report as `lowering`
+        base_mva: System base for that transformation
 
     Returns:
         Dict containing status and network information
@@ -421,14 +432,17 @@ def load_network_from_json(
             study_commit=study_commit,
             time_index=time_index,
             scenario_id=scenario_id,
+            powerio_ir=powerio_ir,
+            edits=edits,
+            to_balanced=to_balanced,
+            base_mva=base_mva,
         )
-        _current_net, conversion_warnings = _powerio_to_net(prepared)
+        _current_net, fields = _powerio_to_net(prepared)
     except Exception as e:
         return {"status": "error", "message": f"Failed to load network: {str(e)}"}
     return _network_info_response(
-        "Network loaded successfully from JSON transport",
-        warnings=list(prepared.warnings) + conversion_warnings,
-        package=prepared.package,
+        "Network loaded successfully from PowerIO IR",
+        **fields,
     )
 
 
@@ -458,13 +472,24 @@ def export_network_to_format(to_format: str) -> Dict[str, Any]:
         from pandapower.converter.pypower.to_ppc import to_ppc
 
         ppc = to_ppc(net, init="flat")
-        case = powerio.parse(_ppc_to_matpower_text(ppc).encode(), format="matpower", name="network.m")
-        conv = powerio.emit(case, to_format)
+        module = powerio.PioModule.from_value(powerio.from_ppc(ppc))
+        conv = powerio.emit(module, to_format)
     except RuntimeError as re:
         return {"status": "error", "message": str(re)}
     except Exception as e:
         return {"status": "error", "message": f"Failed to export network: {str(e)}"}
-    return {"status": "success", "text": conv.text, "warnings": list(diagnostic_messages(conv.diagnostics))}
+    if conv.text is None:
+        return {
+            "status": "error",
+            "message": f"{to_format} is a directory format; use the powerio server's emit tool with a destination",
+        }
+    return {
+        "status": "success",
+        "text": conv.text,
+        "fidelity": conv.fidelity,
+        "diagnostics": diagnostic_records(conv.diagnostics),
+        "warnings": list(diagnostic_messages(conv.diagnostics)),
+    }
 
 
 if __name__ == "__main__":

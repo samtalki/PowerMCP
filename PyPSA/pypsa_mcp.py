@@ -787,7 +787,7 @@ def _import_case_to_netcdf(case, output_path: str, overwrite_zero_s_nom: Optiona
         "transformers": len(network.transformers),
         "shunt_impedances": len(network.shunt_impedances),
     }
-    return info, warnings
+    return info, warnings, written
 
 
 @mcp.tool()
@@ -800,6 +800,9 @@ def import_case_from_any(
     study_commit: Optional[int] = None,
     time_index: Optional[int] = None,
     scenario_id: Optional[str] = None,
+    edits: str = "",
+    to_balanced: bool = False,
+    base_mva: float = 100.0,
 ) -> Dict[str, Any]:
     """Import any powerio readable case file as a PyPSA network saved to a
     NetCDF file.
@@ -820,6 +823,14 @@ def import_case_from_any(
         study_commit: Retired package selector; export a Tellegen Study state as IR
         time_index: Explicit TimeSeries index
         scenario_id: Explicit ScenarioSet identifier
+        edits: JSON list of typed what-if edits PowerIO applies before the
+            conversion, in list order, for example
+            [{"op": "set_load_active_power", "load": "loads:0", "mw": 91.5}]
+            Consecutive updates of one class apply as one atomic batch, and a
+            bus load reallocation sees the values the edits before it produced.
+        to_balanced: Authorize the multiconductor to balanced transformation;
+            the response carries its readiness report as `lowering`
+        base_mva: System base for that transformation
 
     Returns:
         Dict with status, the saved network_file path, component counts, and
@@ -841,11 +852,15 @@ def import_case_from_any(
             study_commit=study_commit,
             time_index=time_index,
             scenario_id=scenario_id,
+            edits=edits,
+            to_balanced=to_balanced,
+            base_mva=base_mva,
         )
-        info, warnings = _import_case_to_netcdf(
+        info, notes, written = _import_case_to_netcdf(
             prepared, output_path, overwrite_zero_s_nom
         )
-        warnings = list(prepared.warnings) + warnings
+        fields = prepared.response_fields(written)
+        fields["warnings"] = list(dict.fromkeys([*fields["warnings"], *notes]))
     except FileNotFoundError:
         return {"status": "error", "message": f"File not found: {file_path}"}
     except Exception as e:
@@ -855,20 +870,23 @@ def import_case_from_any(
         "message": f"Network imported and saved to {output_path}",
         "network_file": output_path,
         "info": info,
-        "warnings": warnings,
-        **({"package": prepared.package} if prepared.package is not None else {}),
+        **fields,
     }
 
 
 @mcp.tool()
 def import_case_from_json(
-    network_json: str,
-    output_path: str,
+    network_json: str = "",
+    output_path: str = "",
     overwrite_zero_s_nom: Optional[float] = None,
     operating_point: Optional[int] = None,
     study_commit: Optional[int] = None,
     time_index: Optional[int] = None,
     scenario_id: Optional[str] = None,
+    powerio_ir: str = "",
+    edits: str = "",
+    to_balanced: bool = False,
+    base_mva: float = 100.0,
 ) -> Dict[str, Any]:
     """Import PowerIO model JSON or one selected ``.pio.json`` module state
     as a PyPSA network saved to a NetCDF file.
@@ -891,11 +909,23 @@ def import_case_from_json(
         study_commit: Retired package selector; export a Tellegen Study state as IR
         time_index: Explicit TimeSeries index
         scenario_id: Explicit ScenarioSet identifier
+        powerio_ir: Serialized PowerIO IR from the powerio server (the
+            preferred spelling; network_json is its alias)
+        edits: JSON list of typed what-if edits PowerIO applies before the
+            conversion, in list order, for example
+            [{"op": "set_load_active_power", "load": "loads:0", "mw": 91.5}]
+            Consecutive updates of one class apply as one atomic batch, and a
+            bus load reallocation sees the values the edits before it produced.
+        to_balanced: Authorize the multiconductor to balanced transformation;
+            the response carries its readiness report as `lowering`
+        base_mva: System base for that transformation
 
     Returns:
         Dict with status, the saved network_file path, component counts, and
         warnings about dropped or adjusted data
     """
+    if not output_path:
+        return {"status": "error", "message": "output_path is required"}
     try:
         output_path = checked_path(output_path, purpose="output_path", for_write=True)
     except PathNotAllowed as exc:
@@ -907,11 +937,16 @@ def import_case_from_json(
             study_commit=study_commit,
             time_index=time_index,
             scenario_id=scenario_id,
+            powerio_ir=powerio_ir,
+            edits=edits,
+            to_balanced=to_balanced,
+            base_mva=base_mva,
         )
-        info, warnings = _import_case_to_netcdf(
+        info, notes, written = _import_case_to_netcdf(
             prepared, output_path, overwrite_zero_s_nom
         )
-        warnings = list(prepared.warnings) + warnings
+        fields = prepared.response_fields(written)
+        fields["warnings"] = list(dict.fromkeys([*fields["warnings"], *notes]))
     except Exception as e:
         return {"status": "error", "message": f"Failed to import case: {str(e)}"}
     return {
@@ -919,8 +954,7 @@ def import_case_from_json(
         "message": f"Network imported and saved to {output_path}",
         "network_file": output_path,
         "info": info,
-        "warnings": warnings,
-        **({"package": prepared.package} if prepared.package is not None else {}),
+        **fields,
     }
 
 

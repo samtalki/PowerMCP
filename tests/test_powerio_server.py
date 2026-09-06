@@ -827,3 +827,65 @@ def test_opendss_without_containment_does_not_scan_the_parent_tree(
     result = configuration.compile_opendss_file(str(dss_path))
 
     assert result["success"] is True
+
+
+# ---- 0.11 boundary: powerio_ir, typed edits, lowering, response tail -----------
+
+
+def test_adapters_take_powerio_ir_and_report_the_shared_tail(tmp_path):
+    ir = powerio.serialize(powerio.parse(CASE9)).text
+    out = tmp_path / "case9.nc"
+    result = pypsa_mcp.import_case_from_json(powerio_ir=ir, output_path=str(out))
+    assert result["status"] == "success", result
+    assert result["value_type"] == "powerio.BalancedNetwork"
+    assert result["selection"] == {}
+    assert result["fidelity"] in {"canonical", "exact_same_format"}
+    assert isinstance(result["diagnostics"], list)
+    assert result["package"]["schema"] == "pio-ir"
+    both = pypsa_mcp.import_case_from_json(powerio_ir=ir, network_json=ir, output_path=str(tmp_path / "x.nc"))
+    assert both["status"] == "error" and "not both" in both["message"]
+    missing = pypsa_mcp.import_case_from_json(powerio_ir=ir)
+    assert missing["status"] == "error" and "output_path" in missing["message"]
+
+
+def test_typed_edits_reach_the_pandapower_model():
+    panda_dir = str(TOOLS["pandapower"].resolve_server_dir())
+    if panda_dir not in sys.path:
+        sys.path.insert(0, panda_dir)
+    import panda_mcp
+    base = powerio.parse(CASE9).value
+    load_id = base.loads[0].get("uid") or "loads:0"
+    ir = powerio.serialize(powerio.parse(CASE9)).text
+    edits = json.dumps([
+        {"op": "set_load_active_power", "load": load_id, "mw": 91.5},
+        {"op": "set_branch_in_service", "branch": base.branches[0].get("uid") or "branches:0", "in_service": False},
+    ])
+    result = panda_mcp.load_network_from_json(powerio_ir=ir, edits=edits)
+    assert result["status"] == "success", result
+    assert result["edits"]["connectivity_changed"] is True
+    assert {change["component_type"] for change in result["edits"]["changes"]} == {"load", "branch"}
+    assert 91.5 in set(round(float(p), 3) for p in panda_mcp._current_net.load["p_mw"])
+    assert not panda_mcp._current_net.line["in_service"].all() or not panda_mcp._current_net.trafo["in_service"].all()
+    rejected = panda_mcp.load_network_from_json(powerio_ir=ir, edits='[{"op": "teleport"}]')
+    assert rejected["status"] == "error" and "unknown op" in rejected["message"]
+
+
+def test_multiconductor_input_needs_the_explicit_lowering_flag(tmp_path):
+    feeder = Path(__file__).resolve().parent / "data" / "opendss" / "fourwire_linecode.dss"
+    refused = pypsa_mcp.import_case_from_any(str(feeder), str(tmp_path / "refused.nc"))
+    assert refused["status"] == "error" and "to_balanced" in refused["message"]
+    lowered = pypsa_mcp.import_case_from_any(
+        str(feeder), str(tmp_path / "lowered.nc"), to_balanced=True, base_mva=1.0
+    )
+    assert lowered["status"] == "success", lowered
+    assert lowered["value_type"] == "powerio.MulticonductorNetwork"
+    assert "ready" in lowered["lowering"]
+    assert (tmp_path / "lowered.nc").exists()
+
+
+def test_matrix_tool_names_its_axes_when_the_installed_powerio_does():
+    matrix = powerio_mcp.calc_matrix("bprime", path=str(CASE9))
+    assert matrix["shape"] == [9, 9]
+    if "row_ids" in matrix:  # powerio 0.11.1 and later
+        assert matrix["row_ids"] == matrix["col_ids"]
+        assert len(matrix["row_ids"]) == 9
