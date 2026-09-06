@@ -522,8 +522,10 @@ def load_network_from_json(
         powerio_ir: Serialized PowerIO IR from the powerio server (the
             preferred spelling; network_json is its alias)
         edits: JSON list of typed what-if edits PowerIO applies before the
-            conversion, for example
+            conversion, in list order, for example
             [{"op": "set_load_active_power", "load": "loads:0", "mw": 91.5}]
+            Consecutive updates of one class apply as one atomic batch, and a
+            bus load reallocation sees the values the edits before it produced.
         to_balanced: Authorize the multiconductor to balanced transformation;
             the response carries its readiness report as `lowering`
         base_mva: System base for that transformation
@@ -599,8 +601,10 @@ def load_network_from_any(
         time_index: Explicit TimeSeries index
         scenario_id: Explicit ScenarioSet identifier
         edits: JSON list of typed what-if edits PowerIO applies before the
-            conversion, for example
+            conversion, in list order, for example
             [{"op": "set_load_active_power", "load": "loads:0", "mw": 91.5}]
+            Consecutive updates of one class apply as one atomic batch, and a
+            bus load reallocation sees the values the edits before it produced.
         to_balanced: Authorize the multiconductor to balanced transformation;
             the response carries its readiness report as `lowering`
         base_mva: System base for that transformation

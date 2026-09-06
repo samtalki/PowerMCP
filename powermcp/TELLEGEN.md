@@ -18,6 +18,19 @@ search for a `CapacityPlanSpec` and returns the proposal with its exact
 proposed solution module. `capabilities` and `contract` describe the installed
 build; `contract` carries the generated schemas for every request.
 
+Tellegen consumes a balanced network or a calculation instance
+(`powerio.DcOpfInstance`, `powerio.AcPfInstance`, `powerio.AcOpfInstance`) and
+lowers nothing. A multiconductor value is refused in this process, before the
+binary runs, with the powerio server's `to_balanced` named as the step that
+lowers it; a module PowerIO marks with an error severity diagnostic is refused
+on the same terms as at every other solver boundary. `solve` carries the shared
+response tail for the module it handed over — `value_type`, `selection`,
+`diagnostics` and `warnings` — and `solve_module` and `plan` carry it beside
+what the returned module states (its `value_type`, `termination` and
+`objective` when the solution states them). The emission `fidelity` and the
+typed `edits` list belong to the powerio adapters; Tellegen's `edits` argument
+is the native request object (`{"deltas": ..., "rates": ...}`).
+
 Read `study_contract` for the installed build's generated Rust schemas and
 formulation capabilities. `study_create` accepts `CreateStudy`, including the
 PowerIO generation-2 input, outer objective and decision space. `study_run`

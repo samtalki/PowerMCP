@@ -169,17 +169,27 @@ import_case_from_json(
 
 Every adapter response carries the same tail: `value_type` (the PowerIO
 structural type that was selected), `selection`, `diagnostics` (full PowerIO
-records with code, severity, target, spans and suggested action), `warnings`,
-and the emission `fidelity` (`exact_same_format` when PowerIO echoed retained
-source bytes, `canonical` for fresh output). The `package` key keeps the IR
-context earlier clients read.
+records with code, severity, target, spans and suggested action) and
+`warnings`. The powerio adapters add the emission `fidelity`
+(`exact_same_format` when PowerIO echoed retained source bytes, `canonical` for
+fresh output) and the typed `edits` report described below, because they own
+the conversion into their own model. The `package` key keeps the IR context
+earlier clients read.
+
+The Tellegen tools carry the same four keys for the module they hand to the
+native solver, and `solve_module` and `plan` add what the returned module
+states. They take no typed `edits` list: Tellegen's own `edits` argument is the
+native request object (`{"deltas": ..., "rates": ...}`) the CLI applies inside
+the solve.
 
 #### Typed edits before a solver import
 
-Each adapter accepts `edits`, a JSON list of what-if changes PowerIO applies
-as typed updates before the conversion. The whole list is validated first and
-each class of update is applied atomically; the response reports the changed
-components under `edits`.
+The powerio adapters accept `edits`, a JSON list of what-if changes PowerIO
+applies as typed updates before the conversion. The whole list is validated
+first, then applied in list order; consecutive updates of one class apply as
+one atomic batch, and a bus load reallocation sees the values produced by the
+edits before it. The response reports the changed components, in application
+order, under `edits`.
 
 | op | keys |
 |---|---|
@@ -258,6 +268,10 @@ edits, sensitivities, max_elements)`, `solve_module(..., out_path)`,
 `study_inspect`, `study_run`, `study_export`, `study_import`. A grid exchange
 `path` is parsed by PowerIO in the server process and serialized to IR before
 it reaches the binary; collection entries take `time_index` and `scenario_id`.
+Tellegen takes a balanced network or a calculation instance and lowers nothing:
+a multiconductor value is refused here, before the binary runs, so lower it
+with the powerio server's `to_balanced` first. A module PowerIO marks with an
+error is refused on the same terms as every other adapter refuses it.
 Applying a Study proposal binds a recommendation to the Study and is a human
 action: it is not a tool, and `study_run` refuses the `apply` operation.
 
