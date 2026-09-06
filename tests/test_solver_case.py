@@ -212,6 +212,16 @@ def test_consecutive_updates_of_one_class_are_one_batch_in_list_order():
     ]
 
 
+def test_a_rejected_edit_states_its_diagnostic_code_once():
+    with pytest.raises(ValueError) as rejected:
+        resolve_solver_case(file_path=str(CASE9),
+                            edits='[{"op": "set_load_active_power", "load": "loads:999", "mw": 1.0}]')
+    message = str(rejected.value)
+    assert message.startswith("edit rejected: ")
+    codes = [word for word in message.split() if word.isupper() and "." in word]
+    assert codes and message.count(codes[0]) == 1
+
+
 def test_edits_are_validated_as_a_whole_before_anything_applies():
     base = powerio.parse(CASE9).value
     load_id = base.loads[0].get("uid") or "loads:0"

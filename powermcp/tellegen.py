@@ -70,8 +70,8 @@ async def _call(arguments: list[str], request: Any = None, *, raw_stdin: Optiona
 
     ``request`` is JSON encoded onto stdin; ``raw_stdin`` passes text as is (a
     serialized module). Progress events the CLI prints on stderr, one JSON
-    object per line, are returned under ``progress`` when the result is an
-    object.
+    object naming its ``event`` per line, are returned under ``progress`` when
+    the result is an object.
     """
     if raw_stdin is not None:
         data = raw_stdin.encode()
@@ -119,11 +119,16 @@ async def _call(arguments: list[str], request: Any = None, *, raw_stdin: Optiona
     progress = []
     for line in stderr.decode(errors="replace").splitlines():
         line = line.strip()
-        if line.startswith("{"):
-            try:
-                progress.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        # Only a JSON object naming its `event` is a progress event; any other
+        # line the CLI logged stays part of its stderr text.
+        if isinstance(event, dict) and "event" in event:
+            progress.append(event)
     if progress and isinstance(result, dict):
         result = {**result, "progress": progress}
     return result
@@ -159,7 +164,7 @@ def _module_ir(
     time_index: Optional[int],
     scenario_id: Optional[str],
 ) -> tuple[str, dict[str, Any]]:
-    """Serialized generation-2 IR for one declared value, and the selection that reached it.
+    """Serialized generation-2 IR for one declared value, and the input side of the response.
 
     PowerIO parses a grid exchange ``path`` and serializes the module; an IR
     document is deserialized so its identity is checked. A module PowerIO marks
@@ -169,9 +174,16 @@ def _module_ir(
     point entry travels as the network it states. Tellegen accepts a balanced
     network or a calculation instance and lowers nothing, so any other value is
     named here rather than after a round trip through the native process.
+
+    Returns the serialized module and the shared response tail the input
+    states: ``value_type``, the ``selection`` that reached it, ``diagnostics``
+    and ``warnings``.
     """
     import powerio
-    from powermcp.solver_case import _check_diagnostics, _operating_point_module, _select
+    from powermcp.solver_case import (
+        SolverCase, _check_diagnostics, _operating_point_module, _select,
+        diagnostic_messages, diagnostic_records,
+    )
 
     if bool(powerio_ir) == (path is not None):
         raise ValueError("provide exactly one of powerio_ir or path")
@@ -183,11 +195,15 @@ def _module_ir(
     else:
         module = powerio.deserialize(io.StringIO(powerio_ir))
     _check_diagnostics(module.diagnostics)
+    diagnostics = list(module.diagnostics)
     selected, selection = _select(module, time_index, scenario_id)
     _check_diagnostics(selected.diagnostics)
+    if selected is not module:
+        diagnostics.extend(selected.diagnostics)
     module = selected
     if isinstance(module.value, powerio.OperatingPoint):
-        module = _operating_point_module(module, [])
+        module = _operating_point_module(module, diagnostics)
+        diagnostics.extend(module.diagnostics)
     value = module.value
     value_type = getattr(getattr(module, "_inner", None), "_type_name", None) or f"powerio.{type(value).__name__}"
     # The values the native CLI consumes: a balanced network becomes the default
@@ -202,29 +218,61 @@ def _module_ir(
     text = powerio.serialize(module).text
     if text is None:
         raise RuntimeError("PowerIO serialization returned no text")
-    return text, selection
+    network = value if isinstance(value, powerio.BalancedNetwork) else value.network
+    case = SolverCase(
+        module, network,
+        tuple(dict.fromkeys(diagnostic_messages(diagnostics))),
+        value_type=str(value_type), selection=selection,
+        diagnostics=tuple(diagnostic_records(diagnostics)),
+    )
+    return text, case.response_fields()
 
 
-def _module_summary(ir_text: str) -> dict[str, Any]:
-    """Value type and diagnostics summary of a serialized module Tellegen returned."""
-    import powerio
-    from powermcp.solver_case import diagnostic_records
-
-    module = powerio.deserialize(io.StringIO(ir_text))
-    records = diagnostic_records(module.diagnostics)
+def _counts(records: list[dict[str, Any]]) -> dict[str, int]:
     counts: dict[str, int] = {}
     for record in records:
         counts[record["severity"]] = counts.get(record["severity"], 0) + 1
+    return counts
+
+
+def _module_summary(ir_text: str) -> dict[str, Any]:
+    """Value type, diagnostics and solved status of a serialized module Tellegen returned."""
+    import powerio
+    from powermcp.solver_case import diagnostic_messages, diagnostic_records
+
+    module = powerio.deserialize(io.StringIO(ir_text))
+    records = diagnostic_records(module.diagnostics)
     value_type = getattr(getattr(module, "_inner", None), "_type_name", None) or f"powerio.{type(module.value).__name__}"
-    summary: dict[str, Any] = {"value_type": str(value_type), "diagnostics": records, "diagnostics_counts": counts}
-    value = module.value
-    for name in ("termination", "objective"):
-        if hasattr(value, name):
-            try:
-                summary[name] = getattr(value, name)
-            except Exception:  # a solution field the binding does not expose
-                continue
+    summary: dict[str, Any] = {
+        "value_type": str(value_type),
+        "diagnostics": records,
+        "diagnostics_counts": _counts(records),
+        "warnings": list(dict.fromkeys(diagnostic_messages(module.diagnostics))),
+    }
+    # powerio 0.11 exposes no solution fields on the Python value; the stored
+    # IR of a solution states the solver's termination and objective itself.
+    data = json.loads(ir_text).get("value", {}).get("data")
+    if isinstance(data, dict):
+        termination = data.get("termination")
+        if isinstance(termination, dict):
+            termination = termination.get("kind")
+        if isinstance(termination, str):
+            summary["termination"] = termination
+        objective = data.get("objective")
+        if isinstance(objective, (int, float)) and not isinstance(objective, bool):
+            summary["objective"] = float(objective)
     return summary
+
+
+def _over_input(tail: dict[str, Any], summary: dict[str, Any]) -> dict[str, Any]:
+    """What the returned module states, over the input side it was solved from."""
+    diagnostics = [*tail["diagnostics"], *summary["diagnostics"]]
+    return {
+        **tail, **summary,
+        "diagnostics": diagnostics,
+        "diagnostics_counts": _counts(diagnostics),
+        "warnings": list(dict.fromkeys([*tail["warnings"], *summary["warnings"]])),
+    }
 
 
 def _bounded(payload: Any, max_elements: int) -> Any:
@@ -304,7 +352,7 @@ async def solve(
         raise ValueError(f"formulation must be one of {list(FORMULATIONS)}")
     if max_elements < 1:
         raise ValueError("max_elements must be positive")
-    ir_text, selection = _module_ir(powerio_ir, path, source_format, time_index, scenario_id)
+    ir_text, tail = _module_ir(powerio_ir, path, source_format, time_index, scenario_id)
     request = {"formulation": formulation}
     request_edits = _json_argument(edits, "edits", dict)
     request_sens = _json_argument(sensitivities, "sensitivities", list)
@@ -313,7 +361,7 @@ async def solve(
     if request_sens:
         request["sensitivities"] = request_sens
     response = await _call([json.dumps(request)], raw_stdin=ir_text)
-    return {"formulation": formulation, "selection": selection, "response": _bounded(response, max_elements)}
+    return {"formulation": formulation, **tail, "response": _bounded(response, max_elements)}
 
 
 @mcp.tool()
@@ -328,10 +376,10 @@ async def solve_module(
 ) -> dict[str, Any]:
     """Solve a stored module's DC OPF instance (a BalancedNetwork becomes the default instance) and return the powerio.DcOpfSolution module as PowerIO IR, written to out_path when given."""
     destination = _out_path(out_path, overwrite)
-    ir_text, selection = _module_ir(powerio_ir, path, source_format, time_index, scenario_id)
+    ir_text, tail = _module_ir(powerio_ir, path, source_format, time_index, scenario_id)
     solution = await _call(["solve-module"], raw_stdin=ir_text)
     solution_text = json.dumps(solution)
-    return {"selection": selection, **_module_summary(solution_text), **_deliver(solution_text, destination, overwrite)}
+    return {**_over_input(tail, _module_summary(solution_text)), **_deliver(solution_text, destination, overwrite)}
 
 
 @mcp.tool()
@@ -351,10 +399,10 @@ async def plan(
     specification = _json_argument(spec, "spec", dict)
     if not specification:
         raise ValueError("spec must be a CapacityPlanSpec object")
-    ir_text, selection = _module_ir(powerio_ir, path, source_format, time_index, scenario_id)
+    ir_text, tail = _module_ir(powerio_ir, path, source_format, time_index, scenario_id)
     response = await _call(["plan"], {"module": json.loads(ir_text), "spec": specification})
     solution = response.get("solution_module")
-    result: dict[str, Any] = {"selection": selection, "plan": _bounded(response.get("plan"), max_elements)}
+    result: dict[str, Any] = {**tail, "plan": _bounded(response.get("plan"), max_elements)}
     if solution is not None:
         solution_text = json.dumps(solution)
         result["solution"] = _module_summary(solution_text)

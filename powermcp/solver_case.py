@@ -341,9 +341,8 @@ def apply_edits(
                 updates = [wrap(update) for update in payload] if wrap else payload
                 reports.append(powerio.apply_updates(module, updates))
     except (powerio.PowerIOError, TypeError) as exc:
-        code = getattr(exc, "code", None)
-        prefix = f"{code}: " if code else ""
-        raise ValueError(f"edit rejected: {prefix}{exc}") from exc
+        # PowerIOError.__str__ already states the stable diagnostic code.
+        raise ValueError(f"edit rejected: {exc}") from exc
     return module, _report_payload(reports)
 
 

@@ -104,6 +104,9 @@ def main(argv):
                 with open(path + ".applied", "w", encoding="utf-8") as marker:
                     marker.write("applied")
             if "--progress" in argv:
+                # A progress event names itself; the trial log line beside it is
+                # ordinary stderr text and must not be read as one.
+                print(json.dumps({"trial": 1, "objective": 1.0}), file=sys.stderr)
                 print(json.dumps({"event": "study_checkpoint", "index": 1}), file=sys.stderr)
             bundle["document"]["revision"] += 1
             with open(path, "w", encoding="utf-8") as handle:

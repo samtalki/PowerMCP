@@ -140,6 +140,10 @@ def test_solve_hands_generation_two_ir_to_the_binary(fake_binary):
     result = asyncio.run(tellegen.solve(path=str(CASE9)))
     assert result["formulation"] == "dcopf"
     assert result["selection"] == {}
+    assert result["value_type"] == "powerio.BalancedNetwork"
+    assert result["diagnostics"] == [] and result["warnings"] == []
+    # fidelity and the typed edit report belong to the powerio adapters.
+    assert "fidelity" not in result and "lowering" not in result
     assert result["response"]["status"] == "optimal"
     assert len(result["response"]["lmp"]) == 9
     (call,) = fake_binary()
@@ -147,6 +151,31 @@ def test_solve_hands_generation_two_ir_to_the_binary(fake_binary):
     module = json.loads(call["stdin"])
     assert module["schema"] == "pio-ir" and module["version"] == 2
     assert module["value"]["type"] == "powerio.BalancedNetwork"
+
+
+def test_the_input_side_diagnostics_travel_with_every_response(fake_binary):
+    """The module's own records reach the caller, not only the returned module's."""
+    lowered = powerio.parse(DIST).to_balanced(1.0)
+    ir = powerio.serialize(lowered).text
+    codes = {record["code"] for record in tellegen._module_ir(ir, None, None, None, None)[1]["diagnostics"]}
+    assert codes and all(code.startswith("TRANSFORM.MULTI_TO_BALANCED") for code in codes)
+
+    solved = asyncio.run(tellegen.solve(powerio_ir=ir))
+    assert {record["code"] for record in solved["diagnostics"]} == codes
+    assert len(solved["warnings"]) == len(codes)
+
+    module = asyncio.run(tellegen.solve_module(powerio_ir=ir))
+    # The stand-in echoes the module it was given, so its records repeat the
+    # input side here; a real solution module carries none of its own.
+    assert codes <= {record["code"] for record in module["diagnostics"]}
+    assert module["diagnostics_counts"]["remark"] >= len(codes)
+    assert set(module["warnings"]) == set(solved["warnings"])
+    assert module["value_type"] == "powerio.BalancedNetwork"  # the stand-in echoes the input
+    assert module["selection"] == {}
+
+    planned = asyncio.run(tellegen.plan(json.dumps({"budget_mw": 1}), powerio_ir=ir))
+    assert {record["code"] for record in planned["diagnostics"]} == codes
+    assert planned["value_type"] == "powerio.BalancedNetwork"
 
 
 def test_multiconductor_input_fails_before_the_native_process(fake_binary, tmp_path):
@@ -279,6 +308,7 @@ def test_apply_never_reaches_the_binary_and_progress_is_returned(fake_binary, tm
     assert not (tmp_path / "study.json.applied").exists()
     result = asyncio.run(tellegen.study_run(str(study), 1, {"kind": "inspect", "state": "base"}))
     assert result["revision"] == 2 and result["experiment"] == "e1"
+    # The stand-in also logs a JSON trial line; only the event is progress.
     assert result["progress"] == [{"event": "study_checkpoint", "index": 1}]
     assert fake_binary()[-1]["argv"] == ["study", "run", str(study), "--progress"]
 
@@ -324,8 +354,12 @@ def test_real_binary_solves_case9(monkeypatch):
     result = asyncio.run(tellegen.solve(path=str(CASE9)))
     assert result["response"]["status"] in {"optimal", "Optimal", "feasible", "Feasible"}
     assert "objective" in result["response"]
+    assert result["value_type"] == "powerio.BalancedNetwork"
+    assert result["selection"] == {} and result["diagnostics"] == []
     solution = asyncio.run(tellegen.solve_module(path=str(CASE9)))
     assert solution["value_type"] == "powerio.DcOpfSolution"
+    assert solution["termination"] == "converged"
+    assert solution["objective"] > 0
     with pytest.raises(ValueError, match="balanced network or a calculation instance"):
         asyncio.run(tellegen.solve(path=str(DIST)))
     contract = asyncio.run(tellegen.contract())
