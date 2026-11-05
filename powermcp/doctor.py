@@ -114,6 +114,8 @@ def _dep_status(t: Tool) -> tuple[str, str]:
         return "dim", "skipped, Windows-only"
     if t.name == "surge" and not _surge_supported():
         return "yellow", f"needs Python 3.12 to 3.14 (have {sys.version_info.major}.{sys.version_info.minor})"
+    if t.name == "opendss" and sys.platform == "darwin":
+        return "yellow", "no OpenDSS engine for macOS; py-dss-interface ships Windows and Linux builds"
     if t.name in _PATH_LOADED:
         return "cyan", "vendor engine, loaded from a configured path"
     if t.probe:

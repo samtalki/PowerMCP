@@ -40,6 +40,13 @@ def test_windows_only_skipped_off_windows(monkeypatch):
     assert "Windows-only" in msg
 
 
+def test_opendss_macos_gate(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    style, msg = doctor._dep_status(get_tool("opendss"))
+    assert style == "yellow"
+    assert "macOS" in msg
+
+
 def test_surge_python_gate(monkeypatch):
     monkeypatch.setattr(doctor, "_surge_supported", lambda: False)
     style, msg = doctor._dep_status(get_tool("surge"))

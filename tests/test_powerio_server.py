@@ -827,7 +827,13 @@ def _load_opendss_configuration(monkeypatch):
         update_dss=lambda _dss: None,
         configuration=fake_config,
     )
-    fake_dss_interface = types.SimpleNamespace(DSS=lambda: object())
+    # The compile tool reads the engine's error state and element count.
+    fake_dss = types.SimpleNamespace(
+        errorinterface=types.SimpleNamespace(error_code=0, error_desc=""),
+        circuit=types.SimpleNamespace(num_ckt_elements=1),
+        text=lambda _command: "",
+    )
+    fake_dss_interface = types.SimpleNamespace(DSS=lambda: fake_dss)
     monkeypatch.setitem(
         sys.modules, "py_dss_toolkit", types.SimpleNamespace(dss_tools=fake_tools)
     )

@@ -32,7 +32,9 @@ jobs:
           # [pscad] is psutil, which PSCAD/tests import. [surge] is surge-py,
           # whose marker (>=3.12,<3.15) leaves it uninstalled on 3.10, where the
           # suite skips itself.
-          python -m pip install -e ".[pscad,surge]" pytest
+          # [opendss] brings py-dss-interface's Linux OpenDSS engine, which
+          # tests/test_opendss_compile.py runs.
+          python -m pip install -e ".[pscad,surge,opendss]" pytest
 
       - name: Run tests
         run: >-

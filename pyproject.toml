@@ -68,7 +68,12 @@ dependencies = [
 # --- open-source tool engines ---
 andes      = ["andes"]
 egret      = ["gridx-egret", "pyomo"]          # PyPI dist is `gridx-egret`; imports as `egret`
-opendss    = ["py_dss_toolkit"]
+# 0.16 is the first py_dss_toolkit with every function the OpenDSS server
+# calls (circuit_readiness arrived in 0.15). Since 0.14 it needs
+# py-dss-interface 2.3, which ships the OpenDSS engine for Windows and Linux
+# only, so on macOS the extra installs nothing rather than an old toolkit
+# with no engine.
+opendss    = ["py_dss_toolkit>=0.16; sys_platform == 'win32' or sys_platform == 'linux'"]
 ltspice    = ["PyLTSpice", "matplotlib"]
 surge      = ["surge-py>=0.1.5; python_version >= '3.12' and python_version < '3.15'"]
 hope       = ["PyYAML>=6.0"]

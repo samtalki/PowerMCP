@@ -11,6 +11,8 @@ MCP server for OpenDSS distribution studies using `py_dss_toolkit` and `py_dss_i
 pip install -r OpenDSS/requirements.txt
 ```
 
+The server needs `py_dss_toolkit` 0.16 or later, which runs on py-dss-interface 2.3. That release ships the OpenDSS engine for Windows and Linux only, so on macOS `pip install powermcp[opendss]` installs nothing.
+
 ## Usage
 
 Run the MCP server:
@@ -39,8 +41,17 @@ Responses are JSON with `success` and either `payload` (tabular data) or `error`
 
 | Tool | Purpose |
 |------|---------|
-| **compile_opendss_file** | `ClearAll` + compile a master DSS file; `payload` includes `circuit_readiness`, `circuit_loaded`; may skip recompile when the same file is already loaded (unless `force_recompile`). |
+| **compile_opendss_file** | `ClearAll` + compile a master DSS file; `payload` includes `circuit_readiness`, `circuit_loaded`; may skip recompile when the same file is already loaded (unless `force_recompile`). See [Compile errors](#compile-errors). |
 | **clear_all_opendss_memory** | `ClearAll`; resets `circuit_loaded` and `solution_available`. |
+
+#### Compile errors
+
+OpenDSS does not fail a compile that goes wrong: a `Redirect` to a missing file stops the compile there and leaves a partial circuit, and the tool used to report that circuit as compiled. Now:
+
+- A `Redirect`, `Compile`, `BusCoords` or `LatLongCoords` target that does not exist, in the master file or any file it redirects to, is reported before OpenDSS runs, with the file and line that names it. The path rules are OpenDSS's: a relative target resolves against the directory of the file that names it, and on a case-sensitive filesystem (Linux) `IEEELineCodes.dss` does not match `IEEELineCodes.DSS`. A circuit already loaded stays loaded.
+- An error OpenDSS reports at the end of the compile is returned as `error <code>: <message>`, and the partial circuit is cleared. A missing file stops the compile, so its error (242, 243 or 275) is always the one reported; OpenDSS clears other errors when the next command runs, so only one in the file's last command is seen.
+- A compile that leaves no circuit is an error. On Linux, OpenDSS loads nothing after any missing file error until the server restarts, which is why missing targets are checked first.
+- Error 704 (OpenDSS could not open a text editor for a `Show` command) does not fail the compile; its message is returned as `payload.engine_message`.
 
 ### Model
 

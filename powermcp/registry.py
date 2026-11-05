@@ -122,6 +122,7 @@ TOOLS: dict[str, "Tool"] = {
             "opendss", "OpenDSS", "open-source", windows_only=False, extra="opendss",
             server_dir="OpenDSS", run_kind="script", entry_rel="opendss_mcp.py",
             probe="py_dss_toolkit",
+            notes="py-dss-interface ships the OpenDSS engine for Windows and Linux only.",
         ),
         Tool(
             "hope", "HOPE", "open-source", windows_only=False, extra="hope",
