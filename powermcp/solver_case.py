@@ -387,7 +387,7 @@ def resolve_solver_case(
 
     ``powerio_ir`` is the serialized module the powerio server's ``parse``,
     ``to_normalized`` or ``to_balanced`` tools return; ``network_json`` is its
-    compatibility alias and must carry the same generation-2 document.
+    compatibility alias and must carry the same PowerIO IR document.
     ``operating_point`` is a compatibility spelling for ``time_index``. Study
     history belongs to Tellegen; legacy package commits require migration.
     ``edits`` are typed updates applied before validation; ``to_balanced``

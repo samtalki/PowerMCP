@@ -128,12 +128,14 @@ These tools wrap commercial or locally-installed software, so PowerMCP stores th
 ### Case compilation between servers (PowerIO)
 
 PowerIO IR is the exchange format of this repository. PowerMCP runs the
-server shipped in PowerIO 0.11.11 (`powermcp run powerio` is `python -m
+server shipped in PowerIO 0.12 (`powermcp run powerio` is `python -m
 powerio.mcp`); that server parses every grid exchange format, emits every
 target, summarizes, diagnoses, normalizes, lowers multiconductor networks, and
-calculates matrices. Its `parse` tool returns serialized **PowerIO IR
-generation 2** (`"schema": "pio-ir"`, `"version": 2`), a typed module carrying
-the electrical value, its provenance and its diagnostics. Every other server
+calculates matrices. Its `parse` tool returns serialized **PowerIO IR**
+(`"schema": "pio-ir"`, `"version": "0.12.0"`), a typed module carrying the
+electrical value, its provenance and its diagnostics. PowerIO 0.12 also reads
+the `"version": 2` documents PowerIO 0.11 wrote; 0.11 cannot read 0.12
+documents. Every other server
 here consumes that document: the pandapower, PyPSA, ANDES and Egret adapters
 turn it into their own model with PowerIO's writers. PowerMCP itself never
 re-parses, re-validates, or recomputes what PowerIO states; it routes a

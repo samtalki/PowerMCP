@@ -166,14 +166,14 @@ def test_the_floor_is_found_without_top_level_distribution_metadata(monkeypatch)
     monkeypatch.setattr(
         doctor,
         "requires",
-        lambda _distribution: ("powerio[mcp,matrix]>=0.11.11,<0.12",),
+        lambda _distribution: ("powerio[mcp,matrix]>=0.12.0rc1,<0.13",),
     )
     req = doctor._declared_requirement("powerio")
     assert req is not None
     assert doctor._canonical(req.name) == "powerio"
-    assert Version("0.11.11") in req.specifier
-    assert Version("0.11.10") not in req.specifier
-    assert Version("0.12.0") not in req.specifier
+    assert Version("0.12.0") in req.specifier
+    assert Version("0.11.11") not in req.specifier
+    assert Version("0.13.0") not in req.specifier
 
 
 def test_an_out_of_date_dependency_under_another_name_is_caught(monkeypatch):

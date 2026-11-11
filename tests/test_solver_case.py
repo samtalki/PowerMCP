@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 # solver_case reads PioModule.type_name and powerio.diagnostic_records.
-pytest.importorskip("powerio", minversion="0.11.11")
+pytest.importorskip("powerio", minversion="0.12.0rc1")
 
 import powerio  # noqa: E402
 
@@ -50,7 +50,7 @@ def test_ir_preserves_auditable_context(tmp_path):
     resolved = resolve_solver_case(file_path=str(source))
     assert resolved.network.n_buses == 9
     assert resolved.package["schema"] == "pio-ir"
-    assert resolved.package["generation"] == 2
+    assert resolved.package["generation"] == powerio.versions()["powerio_ir"]["version"]
     assert resolved.package["producer"]["name"] == "powerio"
     assert resolved.package["selection"] == {}
 

@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-pytest.importorskip("powerio", minversion="0.11.11")
+pytest.importorskip("powerio", minversion="0.12.0rc1")
 
 import powerio  # noqa: E402
 from powerio.mcp import server as powerio_mcp  # noqa: E402
@@ -75,14 +75,16 @@ def test_parse_ir_round_trips():
     assert result["value_type"] == "powerio.BalancedNetwork"
     assert result["summary"]["elements"]["buses"] == 9
     document = json.loads(result["powerio_ir"])
-    assert (document["schema"], document["version"]) == ("pio-ir", 2)
+    # From PowerIO 0.12 the header names the release whose schema it follows.
+    assert document["schema"] == "pio-ir"
+    assert document["version"] == powerio.versions()["powerio_ir"]["version"]
     assert powerio.deserialize(result["powerio_ir"].encode()).value.n_buses == 9
 
 
 def test_registered_tools_are_canonical():
     tools = {tool.name: tool for tool in asyncio.run(powerio_mcp.mcp.list_tools())}
     assert {"parse", "emit", "summarize", "to_normalized", "calc_matrix",
-            "diagnostics", "display", "about", "to_balanced", "to_balanced_report"} <= tools.keys()
+            "diagnostics", "about", "to_balanced", "to_balanced_report"} <= tools.keys()
     for name in ("summarize", "to_normalized", "calc_matrix"):
         props = tools[name].input_schema["properties"]
         assert {"path", "content", "powerio_ir", "format"} <= props.keys()
@@ -318,15 +320,54 @@ def test_pypsa_legacy_optimizer_options_fail_clearly(tmp_path):
     assert "legacy Pyomo" in pyomo["message"]
 
 
-def test_pypsa_import_overwrite_zero_s_nom(tmp_path):
+def test_pypsa_import_reads_matpower_zero_as_no_limit(tmp_path):
+    """MATPOWER rateA = 0 means no limit; PowerIO 0.12 reads it as infinity."""
     src = tmp_path / "zero.m"
     src.write_text(ZERO_RATE_CASE)
+    out = tmp_path / "unlimited.nc"
 
-    bare = pypsa_mcp.import_case_from_any(str(src), str(tmp_path / "bare.nc"))
+    r = pypsa_mcp.import_case_from_any(str(src), str(out), overwrite_zero_s_nom=100.0)
+
+    assert r["status"] == "success", r
+    assert not any("rating 0" in w for w in r["warnings"]), r["warnings"]
+    lines = pypsa.Network(str(out)).lines
+    assert (lines.s_max_pu == float("inf")).all()
+
+
+def test_pypsa_loading_reads_the_thermal_limit_pypsa_enforces():
+    """Loading is against s_nom * s_max_pu; an unlimited or zero line reads 0."""
+    import pandas as pd
+
+    network = pypsa.Network()
+    for bus in ("a", "b"):
+        network.add("Bus", bus)
+    network.add("Line", "rated", bus0="a", bus1="b", x=0.1, s_nom=50.0, s_max_pu=0.8)
+    network.add("Line", "unlimited", bus0="a", bus1="b", x=0.1, s_nom=100.0, s_max_pu=float("inf"))
+    network.add("Line", "zero", bus0="a", bus1="b", x=0.1, s_nom=0.0)
+    p0 = pd.Series({"rated": 30.0, "unlimited": 30.0, "zero": 30.0})
+    q0 = pd.Series({"rated": 0.0, "unlimited": 0.0, "zero": 0.0})
+
+    loading = pypsa_mcp._line_loading_pct(network, p0, q0)
+
+    assert loading["rated"] == pytest.approx(75.0)
+    assert loading["unlimited"] == 0.0
+    assert loading["zero"] == 0.0
+
+
+def test_pypsa_import_overwrite_zero_s_nom(tmp_path):
+    """A zero rating is a zero bound, which PyPSA cannot dispatch through."""
+    module = powerio.parse(ZERO_RATE_CASE.encode(), format="matpower", name="zero.m")
+    ir = powerio.serialize(module).text
+    assert '"rate_a": "Infinity"' in ir
+    zero_bound = ir.replace('"rate_a": "Infinity"', '"rate_a": 0.0')
+
+    bare = pypsa_mcp.import_case_from_json(powerio_ir=zero_bound, output_path=str(tmp_path / "bare.nc"))
     assert any("rating 0" in w for w in bare["warnings"]), bare["warnings"]
 
     out = tmp_path / "set.nc"
-    r = pypsa_mcp.import_case_from_any(str(src), str(out), overwrite_zero_s_nom=100.0)
+    r = pypsa_mcp.import_case_from_json(
+        powerio_ir=zero_bound, output_path=str(out), overwrite_zero_s_nom=100.0
+    )
     assert not any("rating 0" in w for w in r["warnings"]), r["warnings"]
     assert (pypsa.Network(str(out)).lines.s_nom == 100.0).all()
 
@@ -781,34 +822,27 @@ def test_gridfm_missing_dir_maps_cleanly(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# PowerWorld .pwd display files. display is provided by the canonical
-# powerio.mcp.server; these tests exercise the re-exported tool.
+# PowerWorld .pwd display files. PowerIO 0.12 removed the display tool; the
+# canonical server's parse reads a display as a GeoLayer.
 # ---------------------------------------------------------------------------
 
-def test_display_decodes_pwd():
-    r = powerio_mcp.display(str(ACTIVSG200_PWD))
-    assert r["format"] == "powerworld-pwd"
-    assert r["canvas"]["width"] > 0 and r["canvas"]["height"] > 0
-    subs = r["substations"]
-    assert subs, "expected at least one substation"
-    assert all(set(s) == {"number", "name", "x", "y"} for s in subs)
-    assert any(s["name"] for s in subs)
-    assert all(
-        isinstance(s["x"], (int, float)) and isinstance(s["y"], (int, float))
-        for s in subs
-    )
+def test_parse_reads_a_pwd_display_as_a_geo_layer():
+    r = powerio_mcp.parse(path=str(ACTIVSG200_PWD))
+    assert r["value_type"] == "powerio.GeoLayer"
+    assert r["summary"]["features"] > 0
+    assert json.loads(r["powerio_ir"])["value"]["type"] == "powerio.GeoLayer"
 
 
-def test_read_display_missing_file_maps_cleanly(tmp_path):
+def test_parse_pwd_missing_file_maps_cleanly(tmp_path):
     with pytest.raises(ValueError):
-        powerio_mcp.display(str(tmp_path / "nope.pwd"))
+        powerio_mcp.parse(path=str(tmp_path / "nope.pwd"))
 
 
-def test_read_display_garbage_file_maps_cleanly(tmp_path):
+def test_parse_pwd_garbage_file_maps_cleanly(tmp_path):
     bad = tmp_path / "garbage.pwd"
     bad.write_bytes(b"not a real display file\x00\x01\x02")
     with pytest.raises(ValueError):
-        powerio_mcp.display(str(bad))
+        powerio_mcp.parse(path=str(bad))
 
 
 # ---------------------------------------------------------------------------

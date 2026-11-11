@@ -65,6 +65,21 @@ def _optimize(network: Network, **kwargs):
     return network.optimize(**kwargs)
 
 
+def _line_loading_pct(network: Network, p0, q0):
+    """Line loading in percent of PyPSA's thermal limit, ``s_nom * s_max_pu``.
+
+    A line without a finite, positive limit reads 0: PowerIO 0.12 writes a
+    branch with no thermal bound as ``s_max_pu = inf``, and a zero rating has
+    no loading to report.
+    """
+    lines = network.lines
+    s_max_pu = lines["s_max_pu"] if "s_max_pu" in lines else 1.0
+    limit = (lines["s_nom"] * s_max_pu).astype(float)
+    limit = limit.where(np.isfinite(limit) & (limit > 0))
+    loading = np.sqrt(p0**2 + q0**2) / limit * 100
+    return loading.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+
+
 # ============= Network Information =============
 
 @mcp.tool()
@@ -177,9 +192,7 @@ def run_contingency_analysis(
         base_v = network.buses_t.v_mag_pu.iloc[0]
         base_p0 = network.lines_t.p0.iloc[0]
         base_q0 = network.lines_t.q0.iloc[0]
-        base_s_nom = network.lines.s_nom
-        base_loading = np.sqrt(base_p0**2 + base_q0**2) / base_s_nom * 100
-        base_loading = base_loading.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+        base_loading = _line_loading_pct(network, base_p0, base_q0)
 
         base_case = {
             "converged": True,
@@ -250,9 +263,7 @@ def run_contingency_analysis(
             # Check thermal violations
             p0 = n.lines_t.p0.iloc[0]
             q0 = n.lines_t.q0.iloc[0]
-            s_nom = n.lines.s_nom
-            loading = np.sqrt(p0**2 + q0**2) / s_nom * 100
-            loading = loading.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+            loading = _line_loading_pct(n, p0, q0)
 
             loading_violations = []
             for line_id_inner in loading.index:
